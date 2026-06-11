@@ -731,73 +731,53 @@ def render_customer_page(settings: dict, products: list):
             st.rerun()
         return
 
-    # ── 세션 상태 초기화 ──
-    if not st.session_state.get("recipients"):
-        st.session_state["recipients"] = [_empty_recipient()]
+    # ── 주문 유형 선택 ──
+    st.markdown("### 주문 유형을 선택해주세요")
+    order_type = st.radio(
+        "",
+        ["🏠 우리집으로 배달 (내가 먹을려고)", "🎁 지인에게 선물"],
+        key="order_type",
+        horizontal=True,
+        label_visibility="collapsed",
+    )
 
-    # ── 주문자(입금자) 정보 ──
-    st.markdown("### 👤 주문자(입금자) 정보")
-    st.caption("실제 주문하고 입금하시는 분의 정보입니다.")
-    with st.container():
+    st.markdown("---")
+
+    if "우리집" in order_type:
+        # ── 모드 1: 본인 수령 ──
+        st.markdown("### 👤 주문자 정보")
+        orderer_name  = st.text_input("이름 *",      placeholder="홍길동",              key="orderer_name")
+        orderer_phone = st.text_input("전화번호 *",  placeholder="010-1234-5678",       key="orderer_phone")
+        address       = st.text_input("배송 주소 *", placeholder="경북 김천시 OO로 OO", key="sender_address")
+        st.markdown("### 🍑 상품 선택")
+        product = st.selectbox("상품 *", products, key="rprod_self")
+        qty     = st.number_input("수량 (박스) *", min_value=1, max_value=99, value=1, step=1, key="rqty_self")
+        memo    = st.text_input("배송 메모 (선택)", key="rmemo_self", placeholder="경비실 맡겨주세요")
+        sender_name    = orderer_name
+        sender_phone   = orderer_phone
+        sender_address = address
+        recipients = [{"name": orderer_name, "phone": orderer_phone, "address": address,
+                       "product": product, "qty": qty, "memo": memo}]
+
+    else:
+        # ── 모드 2: 지인에게 선물 ──
+        st.markdown("### 👤 주문자(입금자) 정보")
+        st.caption("실제 입금하시는 분의 정보입니다.")
         orderer_name  = st.text_input("이름 *",     placeholder="홍길동",        key="orderer_name")
         orderer_phone = st.text_input("전화번호 *", placeholder="010-1234-5678", key="orderer_phone")
-
-    # ── 보내는 분(발송인) 정보 ──
-    st.markdown("### 📤 보내는 분(발송인) 정보")
-    st.caption("택배 송장에 '보내는 분'으로 표시될 정보입니다.")
-
-    sender_same = st.checkbox("보내는 분이 주문자와 같습니다", key="sender_same", value=True)
-
-    if sender_same:
-        sender_name  = orderer_name
-        sender_phone = orderer_phone
-        sender_address = st.text_input("보내는 분 주소 *", placeholder="경북 김천시 OO로 OO", key="sender_address")
-    else:
-        sender_name    = st.text_input("보내는 분 이름 *",     placeholder="홍길동",             key="sender_name")
-        sender_phone   = st.text_input("보내는 분 전화번호 *", placeholder="010-1234-5678",      key="sender_phone")
-        sender_address = st.text_input("보내는 분 주소 *",     placeholder="경북 김천시 OO로 OO", key="sender_address")
-
-    # ── 받는 분 정보 ──
-    st.markdown("### 📦 받는 분 정보")
-
-    recipient_same = st.checkbox("받는 분이 보내는 분과 같습니다 (본인 수령)", key="recipient_same")
-
-    recipients = st.session_state["recipients"]
-
-    if recipient_same:
-        st.info("✅ 보내는 분 정보로 배송됩니다. 상품과 수량만 선택해주세요.")
-        rec = recipients[0]
-        rec["name"]    = sender_name
-        rec["phone"]   = sender_phone
-        rec["address"] = sender_address
-        with st.container():
-            default_prod_idx = products.index(rec["product"]) if rec["product"] in products else 0
-            rec["product"] = st.selectbox("상품 선택 *", products, index=default_prod_idx, key="rprod_self")
-            rec["qty"]     = st.number_input("수량 (박스) *", min_value=1, max_value=99, value=int(rec["qty"]), step=1, key="rqty_self")
-            rec["memo"]    = st.text_input("배송 메모 (선택)", value=rec.get("memo", ""), key="rmemo_self", placeholder="경비실 맡겨주세요")
-    else:
-        st.caption("여러 명에게 따로 보낼 수 있습니다. '받는 분 추가' 버튼을 이용해주세요.")
-        for i in range(len(recipients)):
-            rec = recipients[i]
-            with st.expander(f"📮 {i + 1}번째 받는 분", expanded=True):
-                col_main, col_del = st.columns([6, 1])
-                with col_del:
-                    if len(recipients) > 1:
-                        if st.button("🗑️", key=f"del_{i}", help="이 수령자 삭제"):
-                            st.session_state["recipients"].pop(i)
-                            st.rerun()
-                with col_main:
-                    rec["name"]    = st.text_input("받는 분 이름 *",     value=rec["name"],    key=f"rname_{i}",  placeholder="홍길동")
-                    rec["phone"]   = st.text_input("받는 분 전화번호 *",  value=rec["phone"],   key=f"rphone_{i}", placeholder="010-0000-0000")
-                    rec["address"] = st.text_input("받는 분 주소 *",      value=rec["address"], key=f"raddr_{i}",  placeholder="서울시 강남구 테헤란로 123")
-                    default_prod_idx = products.index(rec["product"]) if rec["product"] in products else 0
-                    rec["product"] = st.selectbox("상품 선택 *", products, index=default_prod_idx, key=f"rprod_{i}")
-                    rec["qty"]     = st.number_input("수량 (박스) *", min_value=1, max_value=99, value=int(rec["qty"]), step=1, key=f"rqty_{i}")
-                    rec["memo"]    = st.text_input("배송 메모 (선택)", value=rec.get("memo", ""), key=f"rmemo_{i}", placeholder="경비실 맡겨주세요")
-
-        if st.button("➕ 받는 분 추가"):
-            st.session_state["recipients"].append(_empty_recipient())
-            st.rerun()
+        st.markdown("### 🎁 받는 분 정보")
+        gift_name    = st.text_input("받는 분 이름 *",     placeholder="홍길동",                  key="gift_name")
+        gift_phone   = st.text_input("받는 분 전화번호 *", placeholder="010-1234-5678",           key="gift_phone")
+        gift_address = st.text_input("배송 주소 *",        placeholder="서울시 강남구 테헤란로 123", key="sender_address")
+        st.markdown("### 🍑 상품 선택")
+        product = st.selectbox("상품 *", products, key="rprod_self")
+        qty     = st.number_input("수량 (박스) *", min_value=1, max_value=99, value=1, step=1, key="rqty_self")
+        memo    = st.text_input("배송 메모 (선택)", key="rmemo_self", placeholder="경비실 맡겨주세요")
+        sender_name    = orderer_name
+        sender_phone   = orderer_phone
+        sender_address = gift_address
+        recipients = [{"name": gift_name, "phone": gift_phone, "address": gift_address,
+                       "product": product, "qty": qty, "memo": memo}]
 
     # ── 계좌 안내 ──
     st.markdown("---")
