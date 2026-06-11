@@ -755,14 +755,19 @@ def render_customer_page(settings: dict, products: list):
         orderer_phone = st.text_input("전화번호 *",  placeholder="010-1234-5678",       key="orderer_phone")
         address       = st.text_input("배송 주소 *", placeholder="경북 김천시 OO로 OO", key="sender_address")
         st.markdown("### 🍑 상품 선택")
-        product = st.selectbox("상품 *", products, key="rprod_self")
-        qty     = st.number_input("수량 (박스) *", min_value=1, max_value=99, value=1, step=1, key="rqty_self")
-        memo    = st.text_input("배송 메모 (선택)", key="rmemo_self", placeholder="경비실 맡겨주세요")
+        st.caption("원하는 상품의 수량을 입력해주세요. (0박스 = 제외)")
+        qtys = {}
+        for prod in products:
+            qtys[prod] = st.number_input(f"{prod} (박스)", min_value=0, max_value=99, value=0, step=1, key=f"qty_self_{prod}")
+        memo = st.text_input("배송 메모 (선택)", key="rmemo_self", placeholder="경비실 맡겨주세요")
         sender_name    = orderer_name
         sender_phone   = orderer_phone
         sender_address = address
-        recipients = [{"name": orderer_name, "phone": orderer_phone, "address": address,
-                       "product": product, "qty": qty, "memo": memo}]
+        recipients = [
+            {"name": orderer_name, "phone": orderer_phone, "address": address,
+             "product": prod, "qty": qty, "memo": memo}
+            for prod, qty in qtys.items() if qty > 0
+        ]
 
     else:
         # ── 모드 2: 지인에게 선물 ──
@@ -776,14 +781,19 @@ def render_customer_page(settings: dict, products: list):
         gift_phone   = st.text_input("받는 분 전화번호 *", placeholder="010-1234-5678",           key="gift_phone")
         gift_address = st.text_input("배송 주소 *",        placeholder="서울시 강남구 테헤란로 123", key="sender_address")
         st.markdown("### 🍑 상품 선택")
-        product = st.selectbox("상품 *", products, key="rprod_self")
-        qty     = st.number_input("수량 (박스) *", min_value=1, max_value=99, value=1, step=1, key="rqty_self")
-        memo    = st.text_input("배송 메모 (선택)", key="rmemo_self", placeholder="경비실 맡겨주세요")
+        st.caption("원하는 상품의 수량을 입력해주세요. (0박스 = 제외)")
+        qtys = {}
+        for prod in products:
+            qtys[prod] = st.number_input(f"{prod} (박스)", min_value=0, max_value=99, value=0, step=1, key=f"qty_gift_{prod}")
+        memo = st.text_input("배송 메모 (선택)", key="rmemo_gift", placeholder="경비실 맡겨주세요")
         sender_name    = orderer_name
         sender_phone   = orderer_phone
         sender_address = orderer_address
-        recipients = [{"name": gift_name, "phone": gift_phone, "address": gift_address,
-                       "product": product, "qty": qty, "memo": memo}]
+        recipients = [
+            {"name": gift_name, "phone": gift_phone, "address": gift_address,
+             "product": prod, "qty": qty, "memo": memo}
+            for prod, qty in qtys.items() if qty > 0
+        ]
 
     # ── 계좌 안내 ──
     st.markdown("---")
@@ -804,6 +814,9 @@ def render_customer_page(settings: dict, products: list):
 
     # ── 주문 제출 버튼 ──
     if st.button("🍑 주문 완료하기", use_container_width=True, type="primary"):
+        if not recipients:
+            st.error("❗ 상품을 하나 이상 선택해주세요.")
+            st.stop()
         errors = _validate_order(
             orderer_name, orderer_phone,
             sender_name, sender_phone, sender_address,
