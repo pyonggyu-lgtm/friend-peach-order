@@ -768,8 +768,9 @@ def render_customer_page(settings: dict, products: list):
         # ── 모드 2: 지인에게 선물 ──
         st.markdown("### 👤 주문자(입금자) 정보")
         st.caption("실제 입금하시는 분의 정보입니다.")
-        orderer_name  = st.text_input("이름 *",     placeholder="홍길동",        key="orderer_name")
-        orderer_phone = st.text_input("전화번호 *", placeholder="010-1234-5678", key="orderer_phone")
+        orderer_name  = st.text_input("이름 *",     placeholder="홍길동",              key="orderer_name")
+        orderer_phone = st.text_input("전화번호 *", placeholder="010-1234-5678",       key="orderer_phone")
+        orderer_address = st.text_input("주소 *",   placeholder="경북 김천시 OO로 OO", key="orderer_address")
         st.markdown("### 🎁 받는 분 정보")
         gift_name    = st.text_input("받는 분 이름 *",     placeholder="홍길동",                  key="gift_name")
         gift_phone   = st.text_input("받는 분 전화번호 *", placeholder="010-1234-5678",           key="gift_phone")
@@ -780,7 +781,7 @@ def render_customer_page(settings: dict, products: list):
         memo    = st.text_input("배송 메모 (선택)", key="rmemo_self", placeholder="경비실 맡겨주세요")
         sender_name    = orderer_name
         sender_phone   = orderer_phone
-        sender_address = gift_address
+        sender_address = orderer_address
         recipients = [{"name": gift_name, "phone": gift_phone, "address": gift_address,
                        "product": product, "qty": qty, "memo": memo}]
 
