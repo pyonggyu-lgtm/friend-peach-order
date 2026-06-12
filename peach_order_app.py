@@ -82,6 +82,13 @@ import random
 import string
 import re
 
+# CoolSMS — 설치 여부에 따라 동적 import
+try:
+    from coolsms import CoolSMS as _CoolSMS
+    _COOLSMS_AVAILABLE = True
+except ImportError:
+    _COOLSMS_AVAILABLE = False
+
 # =============================================================================
 # 페이지 기본 설정
 # =============================================================================
@@ -346,6 +353,7 @@ def save_settings(settings: dict) -> bool:
 # 상품 목록
 # =============================================================================
 
+@st.cache_data(ttl=60)
 def load_products() -> list:
     """'상품목록' 시트 A열(2행~)에서 상품명을 읽어 반환합니다."""
     sheet = get_sheet("상품목록")
@@ -390,9 +398,9 @@ def load_product_prices() -> dict:
 # =============================================================================
 
 def generate_order_number() -> str:
-    """주문번호 생성: PEACH-YYYYMMDD-XXXX (4자리 랜덤 숫자)"""
+    """주문번호 생성: PEACH-YYYYMMDD-XXXXXX (6자리 영숫자 대문자)"""
     today  = datetime.now().strftime("%Y%m%d")
-    suffix = "".join(random.choices(string.digits, k=4))
+    suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
     return f"PEACH-{today}-{suffix}"
 
 
@@ -487,6 +495,58 @@ def send_email(to_addr: str, subject: str, body: str) -> bool:
     except Exception as e:
         st.warning(f"이메일 발송 실패 ({to_addr}): {e}")
         return False
+
+
+# =============================================================================
+# SMS 발송 (CoolSMS)
+# =============================================================================
+
+def send_sms(to_number: str, message: str) -> bool:
+    """
+    CoolSMS를 통해 SMS를 발송합니다.
+    secrets.toml의 [coolsms] api_key / api_secret / sender 를 사용합니다.
+
+    secrets.toml 설정 예시:
+        [coolsms]
+        api_key    = "NCSXXXXXXXXXXXXXX"
+        api_secret = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+        sender     = "01012345678"   # 발신번호 (CoolSMS에 등록된 번호)
+    """
+    if not _COOLSMS_AVAILABLE:
+        return False          # 패키지 미설치 시 조용히 스킵
+    try:
+        api_key    = st.secrets["coolsms"]["api_key"]
+        api_secret = st.secrets["coolsms"]["api_secret"]
+        sender     = st.secrets["coolsms"]["sender"]
+    except Exception:
+        return False          # secrets 미설정 시 스킵
+
+    try:
+        sms = _CoolSMS(api_key, api_secret)
+        sms.send({
+            "to":   re.sub(r"\D", "", to_number),   # 숫자만 전달
+            "from": re.sub(r"\D", "", sender),
+            "text": message,
+            "type": "SMS" if len(message) <= 90 else "LMS",
+        })
+        return True
+    except Exception as e:
+        st.warning(f"문자 발송 실패 ({to_number}): {e}")
+        return False
+
+
+def send_sms_bulk(numbers: list, message: str) -> tuple:
+    """
+    여러 번호에 동일 메시지를 일괄 발송합니다.
+    반환: (성공 건수, 실패 건수)
+    """
+    ok, fail = 0, 0
+    for num in numbers:
+        if send_sms(num, message):
+            ok += 1
+        else:
+            fail += 1
+    return ok, fail
 
 
 # =============================================================================
@@ -1030,6 +1090,23 @@ def _submit_order(orderer_name, orderer_phone, sender_name, sender_phone, sender
 
     if success:
         load_orders.clear()   # 관리자 화면에서 즉시 새 주문을 볼 수 있도록 캐시 클리어
+
+        # ── 주문 확인 문자 자동 발송 (CoolSMS 설정 시) ──
+        product_summary = ", ".join(
+            f"{r['product']} {r['qty']}박스" for r in recipients
+        )
+        bank   = settings.get("bank",           "농협")
+        acct   = settings.get("account_number", "000-0000-0000")
+        holder = settings.get("holder",         "장명숙")
+        sms_msg = (
+            f"[{farm_name}] 주문 접수 완료\n"
+            f"주문번호: {order_number}\n"
+            f"상품: {product_summary}\n"
+            f"입금: {bank} {acct} ({holder})\n"
+            f"입금 확인 후 발송 안내 드리겠습니다."
+        )
+        send_sms(orderer_phone, sms_msg)   # 실패해도 주문은 완료 처리
+
         st.session_state["order_complete"] = True
         st.session_state["order_result"]   = {
             "order_number": order_number,
@@ -1211,22 +1288,47 @@ def render_admin_orders():
             if sheet:
                 saved = 0
                 try:
-                    # 시트 헤더에서 '상태' 열 번호를 동적으로 계산 (1-indexed)
-                    orig_cols = [c for c in df.columns if c != "순번"]
-                    status_col = (orig_cols.index("상태") + 1) if "상태" in orig_cols else 12
-                    for idx in range(len(df)):
-                        orig = df.iloc[idx]["상태"] if "상태" in df.columns else ""
-                        new  = edited_df.iloc[idx]["상태"]
-                        if orig != new:
-                            # idx + 2: 헤더행(1) + 데이터 시작(2)
-                            sheet.update_cell(idx + 2, status_col, new)
-                            saved += 1
-                    if saved:
-                        st.success(f"✅ {saved}건의 상태를 저장했습니다.")
-                        load_orders.clear()   # 캐시 초기화 → 다음 로드 시 최신 데이터
-                        st.rerun()
+                    # 시트 전체를 다시 읽어 실제 행 번호를 매핑 (필터/정렬 후 오프셋 오류 방지)
+                    all_rows = sheet.get_all_values()
+                    if not all_rows:
+                        st.warning("시트가 비어 있습니다.")
                     else:
-                        st.info("변경된 항목이 없습니다.")
+                        headers    = all_rows[0]
+                        status_col = (headers.index("상태")      + 1) if "상태"      in headers else 12
+                        # (주문번호, 받는분이름, 상품명) 조합으로 시트 행 번호 룩업 테이블 생성
+                        col_idx = {h: i for i, h in enumerate(headers)}
+                        lookup = {}
+                        for row_i, row in enumerate(all_rows[1:], start=2):
+                            key = (
+                                row[col_idx["주문번호"]]   if "주문번호"   in col_idx and len(row) > col_idx["주문번호"]   else "",
+                                row[col_idx["받는분이름"]] if "받는분이름" in col_idx and len(row) > col_idx["받는분이름"] else "",
+                                row[col_idx["상품명"]]     if "상품명"     in col_idx and len(row) > col_idx["상품명"]     else "",
+                            )
+                            lookup[key] = row_i
+
+                        for idx in range(len(df)):
+                            orig_status = df.iloc[idx]["상태"] if "상태" in df.columns else ""
+                            new_status  = edited_df.iloc[idx]["상태"]
+                            if orig_status == new_status:
+                                continue
+                            row_data = edited_df.iloc[idx]
+                            key = (
+                                str(row_data.get("주문번호",   "")),
+                                str(row_data.get("받는분이름", "")),
+                                str(row_data.get("상품명",     "")),
+                            )
+                            if key in lookup:
+                                sheet.update_cell(lookup[key], status_col, new_status)
+                                saved += 1
+                            else:
+                                st.warning(f"시트에서 행을 찾지 못했습니다: {key}")
+
+                        if saved:
+                            st.success(f"✅ {saved}건의 상태를 저장했습니다.")
+                            load_orders.clear()
+                            st.rerun()
+                        else:
+                            st.info("변경된 항목이 없습니다.")
                 except Exception as e:
                     st.error(f"저장 실패: {e}")
             else:
@@ -1467,33 +1569,81 @@ def render_admin_email(settings: dict):
 
     st.markdown("---")
 
-    # ── 고객 목록 및 전화번호 표시 ──
+    # ── 고객 목록 및 문자 발송 ──
     customers_df = load_customers()
     if not customers_df.empty:
-        st.markdown(f"**📋 고객 목록 ({len(customers_df)}명) — 전화번호 확인 후 직접 발송하세요**")
+        st.markdown(f"**📋 고객 목록 ({len(customers_df)}명)**")
         st.dataframe(customers_df, use_container_width=True)
+
+        st.markdown("---")
+        # CoolSMS 설정 여부 확인
+        sms_ready = _COOLSMS_AVAILABLE and ("coolsms" in st.secrets)
+        if sms_ready:
+            st.markdown("**📱 문자 일괄 발송 (CoolSMS)**")
+            # 전화번호 컬럼 자동 감지
+            phone_col = next(
+                (c for c in customers_df.columns if "전화" in c or "phone" in c.lower()),
+                None
+            )
+            if phone_col:
+                numbers = customers_df[phone_col].dropna().tolist()
+                st.caption(f"발송 대상: **{len(numbers)}명** · 발송 전 메시지를 반드시 확인하세요.")
+                col_send, col_test = st.columns(2)
+                with col_send:
+                    if st.button("📤 전체 고객에게 문자 발송", use_container_width=True,
+                                 type="primary"):
+                        if not body.strip():
+                            st.error("메시지 내용을 입력해주세요.")
+                        else:
+                            with st.spinner(f"{len(numbers)}명에게 발송 중..."):
+                                ok, fail = send_sms_bulk(numbers, body)
+                            st.success(f"발송 완료: 성공 {ok}건 / 실패 {fail}건")
+                with col_test:
+                    test_number = st.text_input("테스트 번호", placeholder="01012345678",
+                                                key="sms_test_num")
+                    if st.button("테스트 문자 발송", use_container_width=True):
+                        if test_number.strip():
+                            if send_sms(test_number.strip(), body):
+                                st.success(f"테스트 문자 발송 완료 ({test_number})")
+                            else:
+                                st.error("발송 실패 - CoolSMS 설정을 확인해주세요.")
+                        else:
+                            st.warning("테스트 번호를 입력해주세요.")
+            else:
+                st.warning("고객목록 시트에 '전화번호' 열이 없습니다.")
+        else:
+            st.markdown("**직접 발송 안내**")
+            if not _COOLSMS_AVAILABLE:
+                st.info(
+                    "자동 문자 발송을 사용하려면:\n"
+                    "1. `pip install coolsms` 설치\n"
+                    "2. secrets.toml에 [coolsms] api_key / api_secret / sender 추가\n\n"
+                    "지금은 위 메시지를 복사해서 카카오톡/문자로 직접 보내주세요."
+                )
+            else:
+                st.info("secrets.toml에 [coolsms] 설정을 추가하면 자동 발송이 활성화됩니다.")
     else:
         st.warning("고객목록 시트에 고객 정보가 없습니다. '이름 / 전화번호' 형태로 입력해주세요.")
 
 
 # =============================================================================
-# [B] 관리자 탭 5 — 설정
+# [B] 관리자 탭 5 - 설정
 # =============================================================================
 
 def render_admin_settings(settings: dict):
     """농장 정보 및 앱 설정 탭"""
-    st.markdown("### ⚙️ 설정")
+    st.markdown("### 설정")
 
     st.markdown("**농장 / 계좌 정보**")
     col1, col2 = st.columns(2)
     with col1:
-        new_bank   = st.text_input("은행명",           value=settings.get("bank", "농협"),         key="cfg_bank")
-        new_holder = st.text_input("예금주",           value=settings.get("holder", "장명숙"),     key="cfg_holder")
+        new_bank   = st.text_input("은행명",        value=settings.get("bank",           "농협"),    key="cfg_bank")
+        new_holder = st.text_input("예금주",        value=settings.get("holder",         "장명숙"),  key="cfg_holder")
     with col2:
-        new_acct   = st.text_input("계좌번호",         value=settings.get("account_number", ""),  key="cfg_acct")
-        new_phone  = st.text_input("농장 전화번호",    value=settings.get("farm_phone", ""),       key="cfg_phone")
+        new_acct   = st.text_input("계좌번호",      value=settings.get("account_number", ""),       key="cfg_acct")
+        new_phone  = st.text_input("농장 전화번호", value=settings.get("farm_phone",     ""),       key="cfg_phone")
 
-    if st.button("💾 설정 저장"):
+    if st.button("설정 저장"):
         settings.update({
             "bank":           new_bank,
             "holder":         new_holder,
@@ -1502,7 +1652,7 @@ def render_admin_settings(settings: dict):
         })
         if save_settings(settings):
             load_settings.clear()
-            st.success("✅ 설정이 저장되었습니다.")
+            st.success("설정이 저장되었습니다.")
             st.rerun()
         else:
             st.error("저장 실패. Google Sheets 연결을 확인해주세요.")
@@ -1511,11 +1661,11 @@ def render_admin_settings(settings: dict):
     st.markdown("**secrets.toml 설정 안내**")
     st.info(
         "아래 항목은 `.streamlit/secrets.toml` 파일 (또는 Streamlit Cloud Secrets)에서 설정합니다.\n\n"
-        "- `[gcp_service_account]` — Google 서비스 계정 JSON 내용\n"
-        "- `[app] spreadsheet_id` — Google Sheets URL의 `/d/` 뒤 ID\n"
-        "- `[app] admin_password` — 관리자 비밀번호\n"
-        "- `[email]` — Gmail 계정과 앱 비밀번호\n"
-        "- `[account]` — 기본 계좌 정보 (설정 시트보다 우선순위 낮음)"
+        "- `[gcp_service_account]` - Google 서비스 계정 JSON 내용\n"
+        "- `[app] spreadsheet_id` - Google Sheets URL의 `/d/` 뒤 ID\n"
+        "- `[app] admin_password` - 관리자 비밀번호\n"
+        "- `[coolsms]` - CoolSMS API 키 (문자 자동발송용)\n"
+        "- `[account]` - 기본 계좌 정보"
     )
 
     st.markdown("---")
@@ -1524,27 +1674,26 @@ def render_admin_settings(settings: dict):
     if client is not None:
         ss = get_spreadsheet()
         if ss is not None:
-            st.success("✅ Google Sheets 연결 성공")
+            st.success("Google Sheets 연결 성공")
             try:
                 ws_names = [ws.title for ws in ss.worksheets()]
                 st.write("시트 목록:", ", ".join(ws_names))
-                # 필수 시트 확인
                 required = {"주문목록", "상품목록", "고객목록", "설정"}
                 missing  = required - set(ws_names)
                 if missing:
                     st.warning(f"누락된 시트: {', '.join(missing)}")
                 else:
-                    st.success("✅ 필수 시트(주문목록/상품목록/고객목록/설정) 모두 존재")
+                    st.success("필수 시트(주문목록/상품목록/고객목록/설정) 모두 존재")
             except Exception:
                 pass
         else:
-            st.error("❌ 스프레드시트를 열 수 없습니다. spreadsheet_id를 확인해주세요.")
+            st.error("스프레드시트를 열 수 없습니다. spreadsheet_id를 확인해주세요.")
     else:
-        st.error("❌ Google Sheets 연결 실패. gcp_service_account 설정을 확인해주세요.")
+        st.error("Google Sheets 연결 실패. gcp_service_account 설정을 확인해주세요.")
 
 
 # =============================================================================
-# [B] 관리자 페이지 — 탭 통합
+# [B] 관리자 페이지 - 탭 통합
 # =============================================================================
 
 def render_admin_page(settings: dict, products: list):
@@ -1552,18 +1701,18 @@ def render_admin_page(settings: dict, products: list):
     farm_name = _get_farm_name()
     st.markdown(
         f"<div class='peach-header'>"
-        f"<h1>🔧 {farm_name} 관리자</h1>"
+        f"<h1>{farm_name} 관리자</h1>"
         f"<p>주문 관리 및 운영 설정 페이지</p>"
         f"</div>",
         unsafe_allow_html=True,
     )
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📊 주문 현황",
-        "⏰ 주문 기간 설정",
-        "📦 로젠택배 엑셀",
-        "💬 메시지 발송",
-        "⚙️ 설정",
+        "주문 현황",
+        "주문 기간 설정",
+        "로젠택배 엑셀",
+        "메시지 발송",
+        "설정",
     ])
 
     with tab1: render_admin_orders()
@@ -1578,9 +1727,8 @@ def render_admin_page(settings: dict, products: list):
 # =============================================================================
 
 def main():
-    """앱 진입점: 세션 초기화 → 사이드바 로그인 → 관리자/고객 분기"""
+    """앱 진입점: 세션 초기화 -> 사이드바 로그인 -> 관리자/고객 분기"""
 
-    # 세션 상태 초기화 (최초 실행 시)
     for key, default in [
         ("order_complete", False),
         ("order_result",   None),
@@ -1589,10 +1737,8 @@ def main():
         if key not in st.session_state:
             st.session_state[key] = default
 
-    # 사이드바에서 관리자 여부 판단
     is_admin = render_sidebar()
 
-    # 설정 및 상품 목록 로드 (캐시 활용)
     settings = load_settings()
     products = load_products()
     prices   = load_product_prices()
