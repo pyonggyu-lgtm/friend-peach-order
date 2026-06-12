@@ -582,18 +582,22 @@ def generate_logen_excel(df: pd.DataFrame, farm_name: str, settings: dict) -> by
     컬럼 순서: 받는분성명/받는분주소/받는분전화번호/품목/박스수량/
               보내는분성명/보내는분주소/보내는분전화번호/배송메세지
     """
-    farm_phone = settings.get("farm_phone", "")
+    try:
+        farm_phone = st.secrets["app"]["farm_phone"]
+    except Exception:
+        farm_phone = settings.get("farm_phone", "")
 
+    n = len(df)
     logen_df = pd.DataFrame({
-        "받는분성명":       df["받는분이름"].values      if "받는분이름"      in df.columns else "",
-        "받는분주소":       df["받는분주소"].values      if "받는분주소"      in df.columns else "",
-        "받는분전화번호":   df["받는분전화번호"].values  if "받는분전화번호"  in df.columns else "",
-        "품목":             df["상품명"].values          if "상품명"          in df.columns else "",
-        "박스수량":         df["수량"].values            if "수량"            in df.columns else 1,
-        "보내는분성명":     df["보내는분이름"].values    if "보내는분이름"    in df.columns else farm_name,
-        "보내는분주소":     df["보내는분주소"].values    if "보내는분주소"    in df.columns else "",
-        "보내는분전화번호": df["보내는분전화번호"].values if "보내는분전화번호" in df.columns else farm_phone,
-        "배송메세지":       df["배송메모"].values        if "배송메모"        in df.columns else "",
+        "받는분성명":       df["받는분이름"].values     if "받는분이름"     in df.columns else [""] * n,
+        "받는분주소":       df["받는분주소"].values     if "받는분주소"     in df.columns else [""] * n,
+        "받는분전화번호":   df["받는분전화번호"].values if "받는분전화번호" in df.columns else [""] * n,
+        "품목":             df["상품명"].values         if "상품명"         in df.columns else [""] * n,
+        "박스수량":         df["수량"].values           if "수량"           in df.columns else [1] * n,
+        "보내는분성명":     [farm_name] * n,
+        "보내는분주소":     df["주문자주소"].values     if "주문자주소"     in df.columns else [""] * n,
+        "보내는분전화번호": [farm_phone] * n,
+        "배송메세지":       df["배송메모"].values       if "배송메모"       in df.columns else [""] * n,
     })
 
     output = io.BytesIO()
