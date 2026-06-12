@@ -594,9 +594,9 @@ def generate_logen_excel(df: pd.DataFrame, farm_name: str, settings: dict) -> by
         "받는분전화번호":   df["받는분전화번호"].values if "받는분전화번호" in df.columns else [""] * n,
         "품목":             df["상품명"].values         if "상품명"         in df.columns else [""] * n,
         "박스수량":         df["수량"].values           if "수량"           in df.columns else [1] * n,
-        "보내는분성명":     [farm_name] * n,
+        "보내는분성명":     df["주문자이름"].values     if "주문자이름"     in df.columns else [farm_name] * n,
         "보내는분주소":     df["주문자주소"].values     if "주문자주소"     in df.columns else [""] * n,
-        "보내는분전화번호": [farm_phone] * n,
+        "보내는분전화번호": df["주문자전화번호"].values if "주문자전화번호" in df.columns else [farm_phone] * n,
         "배송메세지":       df["배송메모"].values       if "배송메모"       in df.columns else [""] * n,
     })
 
