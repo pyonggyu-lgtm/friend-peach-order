@@ -543,6 +543,16 @@ def validate_phone(phone: str) -> bool:
     return bool(re.match(r"^010-\d{3,4}-\d{4}$", phone.strip()))
 
 
+def _fmt_phone(key: str) -> None:
+    """전화번호 자동 하이픈 포맷 콜백 (on_change용).
+    숫자만 입력해도 010-XXXX-XXXX 형식으로 자동 변환합니다."""
+    digits = re.sub(r"\D", "", st.session_state.get(key, ""))
+    if len(digits) == 11:
+        st.session_state[key] = f"{digits[:3]}-{digits[3:7]}-{digits[7:]}"
+    elif len(digits) == 10:
+        st.session_state[key] = f"{digits[:3]}-{digits[3:6]}-{digits[6:]}"
+
+
 # =============================================================================
 # 로젠택배 엑셀 생성
 # =============================================================================
@@ -735,7 +745,9 @@ def render_customer_page(settings: dict, products: list, prices: dict = None):
         # ── 모드 1: 본인 수령 ──
         st.markdown("### 👤 주문자 정보")
         orderer_name  = st.text_input("이름 *",      placeholder="홍길동",              key="orderer_name")
-        orderer_phone = st.text_input("전화번호 *",  placeholder="010-1234-5678",       key="orderer_phone")
+        orderer_phone = st.text_input("전화번호 *",  placeholder="숫자만 입력 (예: 01012345678)",
+                                      key="orderer_phone",
+                                      on_change=_fmt_phone, args=("orderer_phone",))
         address       = st.text_input("배송 주소 *", placeholder="경북 김천시 OO로 OO", key="sender_address")
         st.markdown("### 🍑 상품 선택")
         st.caption("원하는 상품의 수량을 입력해주세요. (0박스 = 제외)")
@@ -758,7 +770,9 @@ def render_customer_page(settings: dict, products: list, prices: dict = None):
         st.markdown("### 👤 주문자(입금자) 정보")
         st.caption("실제 입금하시는 분의 정보입니다.")
         orderer_name    = st.text_input("이름 *",     placeholder="홍길동",              key="orderer_name")
-        orderer_phone   = st.text_input("전화번호 *", placeholder="010-1234-5678",       key="orderer_phone")
+        orderer_phone   = st.text_input("전화번호 *", placeholder="숫자만 입력 (예: 01012345678)",
+                                        key="orderer_phone",
+                                        on_change=_fmt_phone, args=("orderer_phone",))
         orderer_address = st.text_input("주소 *",     placeholder="경북 김천시 OO로 OO", key="orderer_address")
 
         # ── 받는 분 목록 초기화 ──
@@ -784,7 +798,9 @@ def render_customer_page(settings: dict, products: list, prices: dict = None):
                     st.markdown("**📮 받는 분 정보**")
 
                 st.text_input("이름 *",      placeholder="홍길동",                     key=f"gr_{rid}_name")
-                st.text_input("전화번호 *",  placeholder="010-1234-5678",              key=f"gr_{rid}_phone")
+                st.text_input("전화번호 *",  placeholder="숫자만 입력 (예: 01012345678)",
+                              key=f"gr_{rid}_phone",
+                              on_change=_fmt_phone, args=(f"gr_{rid}_phone",))
                 st.text_input("배송 주소 *", placeholder="서울시 강남구 테헤란로 123", key=f"gr_{rid}_address")
                 st.caption("원하는 상품의 수량을 입력해주세요. (0박스 = 제외)")
                 for prod in products:
@@ -1487,33 +1503,4 @@ def render_admin_page(settings: dict, products: list):
 def main():
     """앱 진입점: 세션 초기화 → 사이드바 로그인 → 관리자/고객 분기"""
 
-    # 세션 상태 초기화 (최초 실행 시)
-    for key, default in [
-        ("order_complete",  False),
-        ("order_result",    None),
-        ("recipients",      None),
-        ("force_customer",  False),
-    ]:
-        if key not in st.session_state:
-            st.session_state[key] = default
-
-    # 사이드바에서 관리자 여부 판단
-    is_admin = render_sidebar()
-
-    # "고객 화면으로" 버튼 클릭 시 강제로 고객 화면 표시
-    if st.session_state.get("force_customer"):
-        is_admin = False
-
-    # 설정 및 상품 목록 로드 (캐시 활용)
-    settings = load_settings()
-    products = load_products()
-    prices   = load_product_prices()
-
-    if is_admin:
-        render_admin_page(settings, products)
-    else:
-        render_customer_page(settings, products, prices)
-
-
-if __name__ == "__main__":
-    main()
+    # 세션 상
