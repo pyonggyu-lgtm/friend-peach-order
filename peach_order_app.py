@@ -109,13 +109,13 @@ st.markdown("""
 }
 [data-testid="stSidebar"] * { color: white !important; }
 [data-testid="stSidebar"] .stTextInput input {
-    background: rgba(255,255,255,0.2) !important;
-    color: white !important;
-    border: 1px solid rgba(255,255,255,0.4) !important;
+    background: rgba(255,255,255,0.95) !important;
+    color: #333 !important;
+    border: 1px solid rgba(255,255,255,0.6) !important;
     border-radius: 8px !important;
 }
 [data-testid="stSidebar"] .stTextInput input::placeholder {
-    color: rgba(255,255,255,0.7) !important;
+    color: #aaa !important;
 }
 
 /* ── 헤더 ── */
@@ -625,7 +625,13 @@ def render_sidebar() -> bool:
         st.markdown("## 🍑 복숭아농장")
         st.markdown("---")
         st.markdown("### 🔐 관리자 로그인")
-        pw = st.text_input("비밀번호", type="password", placeholder="관리자 비밀번호 입력", key="admin_pw")
+        show_pw = st.checkbox("🔍 비밀번호 표시", key="show_admin_pw", value=False)
+        pw = st.text_input(
+            "비밀번호",
+            type="default" if show_pw else "password",
+            placeholder="관리자 비밀번호 입력",
+            key="admin_pw",
+        )
 
         if not pw:
             st.markdown(
