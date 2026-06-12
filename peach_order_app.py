@@ -881,8 +881,6 @@ def _submit_order(orderer_name, orderer_phone, sender_name, sender_phone, sender
             now_str,
             orderer_name.strip(),
             orderer_phone.strip(),
-            sender_name.strip(),
-            sender_phone.strip(),
             sender_address.strip(),
             rec["name"].strip(),
             rec["phone"].strip(),
