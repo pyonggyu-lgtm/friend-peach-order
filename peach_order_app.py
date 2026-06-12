@@ -602,10 +602,10 @@ def render_sidebar() -> bool:
     사이드바에 관리자 비밀번호 입력 UI를 표시합니다.
     올바른 비밀번호 입력 시 True를 반환합니다.
     """
-    # ── << 버튼 좌측에 현재 모드 항상 표시 (CSS 전역 주입) ──
-    _is_admin  = st.session_state.get("_sidebar_is_admin", False)
-    _lbl       = "🔧 관리자" if _is_admin else "🏠 고객"
-    _clr       = "#b71c1c"   if _is_admin else "#2e7d32"
+    # ── << 버튼 좌측 모드 라벨 (CSS 전역 주입) ──
+    _is_admin = st.session_state.get("_sidebar_is_admin", False)
+    _btn_lbl  = "🔧 관리자" if _is_admin else "🏠 고객"
+    _btn_clr  = "#b71c1c"   if _is_admin else "#2e7d32"
     st.markdown(
         f"""<style>
         [data-testid="collapsedControl"] {{
@@ -614,73 +614,106 @@ def render_sidebar() -> bool:
             align-items: center;
         }}
         [data-testid="collapsedControl"]::before {{
-            content: "{_lbl}";
+            content: "{_btn_lbl}";
             font-size: 0.72rem;
             font-weight: 700;
             color: white;
-            background: {_clr};
+            background: {_btn_clr};
             padding: 3px 9px;
             border-radius: 10px;
             margin-right: 5px;
             white-space: nowrap;
-            opacity: 1 !important;
-            visibility: visible !important;
         }}
         </style>""",
         unsafe_allow_html=True,
     )
 
     with st.sidebar:
-        # 사이드바 내부 모드 배지 (항상 표시)
-        st.markdown(
-            f"<div style='background:{_clr};color:white;padding:5px 12px;"
-            f"border-radius:8px;font-weight:bold;font-size:0.85rem;"
-            f"text-align:center;margin-bottom:8px;'>{_lbl} 모드</div>",
-            unsafe_allow_html=True,
-        )
         st.markdown("## 🍑 복숭아농장")
         st.markdown("---")
-        st.markdown("### 🔐 관리자 로그인")
+
+        # ── 비밀번호 입력 ──
         show_pw = st.checkbox("🔍 비밀번호 표시", key="show_admin_pw", value=False)
         pw = st.text_input(
-            "비밀번호",
+            "관리자 비밀번호",
             type="default" if show_pw else "password",
-            placeholder="관리자 비밀번호 입력",
+            placeholder="비밀번호를 입력하세요",
             key="admin_pw",
         )
 
+        # ── 비밀번호 미입력: 고객 모드 ──
         if not pw:
             st.markdown(
-                "<div style='font-size:0.85rem;opacity:0.85;'>"
-                "관리자만 접근 가능합니다.<br>"
-                "고객 주문은 아래 페이지에서 진행해주세요. 🍑"
-                "</div>",
+                """<div style='background:#e8f5e9;border:2px solid #43a047;
+                border-radius:10px;padding:12px 14px;text-align:center;margin:10px 0;'>
+                    <div style='font-size:0.75rem;color:#2e7d32;margin-bottom:4px;'>현재 모드</div>
+                    <div style='font-size:1.15rem;font-weight:bold;color:#1b5e20;'>🏠 고객 모드</div>
+                    <div style='font-size:0.72rem;color:#388e3c;margin-top:6px;'>
+                    관리자 전환 → 위 칸에 비밀번호 입력
+                    </div>
+                </div>""",
                 unsafe_allow_html=True,
             )
             st.session_state["_sidebar_is_admin"] = False
             return False
 
+        # ── 비밀번호 검증 ──
         try:
             correct_pw = st.secrets["app"]["admin_password"]
         except Exception:
-            st.error("⚠️ 관리자 비밀번호가 설정되지 않았습니다. secrets.toml을 확인해주세요.")
+            st.error("⚠️ 관리자 비밀번호가 설정되지 않았습니다.")
             st.session_state["_sidebar_is_admin"] = False
             return False
 
         if pw == correct_pw:
+            # 관리자 인증 완료 — force_customer 여부로 분기
             if st.session_state.get("force_customer"):
-                if st.button("🔧 관리자 화면으로", use_container_width=True):
+                # ── 현재: 고객 모드 (관리자 로그인은 된 상태) ──
+                st.markdown(
+                    """<div style='background:#e8f5e9;border:2px solid #43a047;
+                    border-radius:10px;padding:12px 14px;text-align:center;margin:10px 0;'>
+                        <div style='font-size:0.75rem;color:#2e7d32;margin-bottom:4px;'>현재 모드</div>
+                        <div style='font-size:1.15rem;font-weight:bold;color:#1b5e20;'>🏠 고객 모드</div>
+                        <div style='font-size:0.72rem;color:#388e3c;margin-top:4px;'>
+                        ✅ 관리자 인증 완료 · 아래 버튼으로 전환
+                        </div>
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
+                if st.button("🔧 관리자 화면으로 전환 →", use_container_width=True,
+                             type="primary"):
                     st.session_state["force_customer"] = False
                     st.rerun()
                 st.session_state["_sidebar_is_admin"] = False
                 return False
-            st.success("✅ 관리자 모드")
-            if st.button("🏠 고객 화면으로", use_container_width=True):
-                st.session_state["force_customer"] = True
-                st.rerun()
-            st.session_state["_sidebar_is_admin"] = True
-            return True
+            else:
+                # ── 현재: 관리자 모드 ──
+                st.markdown(
+                    """<div style='background:#ffebee;border:2px solid #e53935;
+                    border-radius:10px;padding:12px 14px;text-align:center;margin:10px 0;'>
+                        <div style='font-size:0.75rem;color:#b71c1c;margin-bottom:4px;'>현재 모드</div>
+                        <div style='font-size:1.15rem;font-weight:bold;color:#b71c1c;'>🔧 관리자 모드</div>
+                        <div style='font-size:0.72rem;color:#c62828;margin-top:4px;'>
+                        ✅ 로그인 완료 · 아래 버튼으로 전환
+                        </div>
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
+                if st.button("🏠 고객 화면으로 전환 →", use_container_width=True):
+                    st.session_state["force_customer"] = True
+                    st.rerun()
+                st.session_state["_sidebar_is_admin"] = True
+                return True
         else:
+            # ── 비밀번호 틀림: 고객 모드 유지 ──
+            st.markdown(
+                """<div style='background:#e8f5e9;border:2px solid #43a047;
+                border-radius:10px;padding:12px 14px;text-align:center;margin:10px 0;'>
+                    <div style='font-size:0.75rem;color:#2e7d32;margin-bottom:4px;'>현재 모드</div>
+                    <div style='font-size:1.15rem;font-weight:bold;color:#1b5e20;'>🏠 고객 모드</div>
+                </div>""",
+                unsafe_allow_html=True,
+            )
             st.error("❌ 비밀번호가 틀렸습니다")
             st.session_state["_sidebar_is_admin"] = False
             return False
