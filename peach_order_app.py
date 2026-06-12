@@ -1190,8 +1190,18 @@ def render_admin_logen(settings: dict):
         return
 
     # 미리보기
-    preview_cols = [c for c in ["주문번호", "받는분이름", "받는분주소", "상품명", "수량", "상태"] if c in filtered.columns]
-    st.dataframe(filtered[preview_cols], use_container_width=True)
+    preview_cols = [c for c in [
+        "주문번호",
+        "주문자이름", "주문자전화번호", "주문자주소",
+        "받는분이름", "받는분전화번호", "받는분주소",
+        "상품명", "수량", "상태",
+    ] if c in filtered.columns]
+    preview_df = filtered[preview_cols].rename(columns={
+        "주문자이름":     "보내는분이름",
+        "주문자전화번호": "보내는분전화번호",
+        "주문자주소":     "보내는분주소",
+    })
+    st.dataframe(preview_df, use_container_width=True)
 
     farm_name = _get_farm_name()
     col_dl, col_mark = st.columns(2)
