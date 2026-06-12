@@ -901,7 +901,7 @@ def _submit_order(orderer_name, orderer_phone, sender_name, sender_phone, sender
         st.session_state["order_result"]   = {
             "order_number": order_number,
             "name":         orderer_name,
-            "address":      orderer_address,
+            "address":      sender_address,
             "recipients":   recipients,
         }
         st.balloons()
