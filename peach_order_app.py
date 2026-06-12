@@ -1015,12 +1015,19 @@ def render_admin_orders():
     if "상태" in df.columns:
         df["상태"] = df["상태"].apply(lambda x: x if x in valid_statuses else "대기")
 
+    # ── 주문 순번 컬럼 추가 (같은 주문번호 = 같은 순번) ──
+    if "주문번호" in df.columns:
+        order_map = {v: i + 1 for i, v in enumerate(df["주문번호"].unique())}
+        df.insert(0, "순번", df["주문번호"].map(order_map))
+    df.index = range(1, len(df) + 1)
+
     # ── 편집 가능한 데이터 테이블 ──
     edited_df = st.data_editor(
         df,
         use_container_width=True,
         num_rows="fixed",
         column_config={
+            "순번": st.column_config.NumberColumn("순번", disabled=True),
             "상태": st.column_config.SelectboxColumn(
                 "상태",
                 options=["대기", "확인", "발송완료"],
