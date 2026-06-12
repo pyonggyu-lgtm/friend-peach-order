@@ -602,7 +602,42 @@ def render_sidebar() -> bool:
     사이드바에 관리자 비밀번호 입력 UI를 표시합니다.
     올바른 비밀번호 입력 시 True를 반환합니다.
     """
+    # ── << 버튼 좌측에 현재 모드 항상 표시 (CSS 전역 주입) ──
+    _is_admin  = st.session_state.get("_sidebar_is_admin", False)
+    _lbl       = "🔧 관리자" if _is_admin else "🏠 고객"
+    _clr       = "#b71c1c"   if _is_admin else "#2e7d32"
+    st.markdown(
+        f"""<style>
+        [data-testid="collapsedControl"] {{
+            display: flex !important;
+            flex-direction: row;
+            align-items: center;
+        }}
+        [data-testid="collapsedControl"]::before {{
+            content: "{_lbl}";
+            font-size: 0.72rem;
+            font-weight: 700;
+            color: white;
+            background: {_clr};
+            padding: 3px 9px;
+            border-radius: 10px;
+            margin-right: 5px;
+            white-space: nowrap;
+            opacity: 1 !important;
+            visibility: visible !important;
+        }}
+        </style>""",
+        unsafe_allow_html=True,
+    )
+
     with st.sidebar:
+        # 사이드바 내부 모드 배지 (항상 표시)
+        st.markdown(
+            f"<div style='background:{_clr};color:white;padding:5px 12px;"
+            f"border-radius:8px;font-weight:bold;font-size:0.85rem;"
+            f"text-align:center;margin-bottom:8px;'>{_lbl} 모드</div>",
+            unsafe_allow_html=True,
+        )
         st.markdown("## 🍑 복숭아농장")
         st.markdown("---")
         st.markdown("### 🔐 관리자 로그인")
@@ -622,13 +657,14 @@ def render_sidebar() -> bool:
                 "</div>",
                 unsafe_allow_html=True,
             )
+            st.session_state["_sidebar_is_admin"] = False
             return False
 
         try:
             correct_pw = st.secrets["app"]["admin_password"]
         except Exception:
-            # secrets.toml 미설정 시 관리자 접근 차단 (보안)
             st.error("⚠️ 관리자 비밀번호가 설정되지 않았습니다. secrets.toml을 확인해주세요.")
+            st.session_state["_sidebar_is_admin"] = False
             return False
 
         if pw == correct_pw:
@@ -636,14 +672,17 @@ def render_sidebar() -> bool:
                 if st.button("🔧 관리자 화면으로", use_container_width=True):
                     st.session_state["force_customer"] = False
                     st.rerun()
+                st.session_state["_sidebar_is_admin"] = False
                 return False
             st.success("✅ 관리자 모드")
             if st.button("🏠 고객 화면으로", use_container_width=True):
                 st.session_state["force_customer"] = True
                 st.rerun()
+            st.session_state["_sidebar_is_admin"] = True
             return True
         else:
             st.error("❌ 비밀번호가 틀렸습니다")
+            st.session_state["_sidebar_is_admin"] = False
             return False
 
 
@@ -1503,4 +1542,28 @@ def render_admin_page(settings: dict, products: list):
 def main():
     """앱 진입점: 세션 초기화 → 사이드바 로그인 → 관리자/고객 분기"""
 
-    # 세션 상
+    # 세션 상태 초기화 (최초 실행 시)
+    for key, default in [
+        ("order_complete", False),
+        ("order_result",   None),
+        ("recipients",     None),
+    ]:
+        if key not in st.session_state:
+            st.session_state[key] = default
+
+    # 사이드바에서 관리자 여부 판단
+    is_admin = render_sidebar()
+
+    # 설정 및 상품 목록 로드 (캐시 활용)
+    settings = load_settings()
+    products = load_products()
+    prices   = load_product_prices()
+
+    if is_admin:
+        render_admin_page(settings, products)
+    else:
+        render_customer_page(settings, products, prices)
+
+
+if __name__ == "__main__":
+    main()
