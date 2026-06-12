@@ -361,6 +361,30 @@ def load_products() -> list:
         return ["복숭아 4kg 일반용", "복숭아 4kg 선물용"]
 
 
+@st.cache_data(ttl=60)
+def load_product_prices() -> dict:
+    """'상품목록' 시트 B열(단가)에서 상품명→단가 딕셔너리를 반환합니다."""
+    sheet = get_sheet("상품목록")
+    if sheet is None:
+        return {}
+    try:
+        rows = sheet.get_all_values()
+        prices = {}
+        for row in rows[1:]:
+            if row and row[0].strip():
+                name = row[0].strip()
+                price = 0
+                if len(row) > 1 and row[1].strip():
+                    try:
+                        price = int(str(row[1]).replace(",", "").replace("원", "").strip())
+                    except ValueError:
+                        price = 0
+                prices[name] = price
+        return prices
+    except Exception:
+        return {}
+
+
 # =============================================================================
 # 주문 저장 / 로드
 # =============================================================================
@@ -630,7 +654,7 @@ def _empty_recipient() -> dict:
     return {"name": "", "phone": "", "address": "", "product": "", "qty": 1, "memo": ""}
 
 
-def render_customer_page(settings: dict, products: list):
+def render_customer_page(settings: dict, products: list, prices: dict = None):
     """고객이 복숭아를 주문하는 공개 페이지를 렌더링합니다."""
     farm_name = _get_farm_name()
 
@@ -690,6 +714,8 @@ def render_customer_page(settings: dict, products: list):
             st.session_state["order_complete"] = False
             st.session_state["order_result"]   = None
             st.session_state["recipients"]     = [_empty_recipient()]
+            st.session_state.pop("gift_rec_ids",     None)
+            st.session_state.pop("gift_rec_next_id", None)
             st.rerun()
         return
 
@@ -731,27 +757,83 @@ def render_customer_page(settings: dict, products: list):
         # ── 모드 2: 지인에게 선물 ──
         st.markdown("### 👤 주문자(입금자) 정보")
         st.caption("실제 입금하시는 분의 정보입니다.")
-        orderer_name  = st.text_input("이름 *",     placeholder="홍길동",              key="orderer_name")
-        orderer_phone = st.text_input("전화번호 *", placeholder="010-1234-5678",       key="orderer_phone")
-        orderer_address = st.text_input("주소 *",   placeholder="경북 김천시 OO로 OO", key="orderer_address")
+        orderer_name    = st.text_input("이름 *",     placeholder="홍길동",              key="orderer_name")
+        orderer_phone   = st.text_input("전화번호 *", placeholder="010-1234-5678",       key="orderer_phone")
+        orderer_address = st.text_input("주소 *",     placeholder="경북 김천시 OO로 OO", key="orderer_address")
+
+        # ── 받는 분 목록 초기화 ──
+        if "gift_rec_ids" not in st.session_state:
+            st.session_state["gift_rec_ids"]     = [0]
+            st.session_state["gift_rec_next_id"] = 1
+
+        rec_ids = st.session_state["gift_rec_ids"]
+
         st.markdown("### 🎁 받는 분 정보")
-        gift_name    = st.text_input("받는 분 이름 *",     placeholder="홍길동",                  key="gift_name")
-        gift_phone   = st.text_input("받는 분 전화번호 *", placeholder="010-1234-5678",           key="gift_phone")
-        gift_address = st.text_input("배송 주소 *",        placeholder="서울시 강남구 테헤란로 123", key="sender_address")
-        st.markdown("### 🍑 상품 선택")
-        st.caption("원하는 상품의 수량을 입력해주세요. (0박스 = 제외)")
-        qtys = {}
-        for prod in products:
-            qtys[prod] = st.number_input(f"{prod} (박스)", min_value=0, max_value=99, value=0, step=1, key=f"qty_gift_{prod}")
-        memo = st.text_input("배송 메모 (선택)", key="rmemo_gift", placeholder="경비실 맡겨주세요")
+        for idx, rid in enumerate(rec_ids):
+            with st.container():
+                if len(rec_ids) > 1:
+                    col_t, col_d = st.columns([5, 1])
+                    col_t.markdown(f"**📮 받는 분 {idx + 1}**")
+                    if col_d.button("🗑️ 삭제", key=f"del_rec_{rid}"):
+                        st.session_state["gift_rec_ids"].remove(rid)
+                        for sfx in (["name", "phone", "address", "memo"]
+                                    + [f"qty_{p}" for p in products]):
+                            st.session_state.pop(f"gr_{rid}_{sfx}", None)
+                        st.rerun()
+                else:
+                    st.markdown("**📮 받는 분 정보**")
+
+                st.text_input("이름 *",      placeholder="홍길동",                     key=f"gr_{rid}_name")
+                st.text_input("전화번호 *",  placeholder="010-1234-5678",              key=f"gr_{rid}_phone")
+                st.text_input("배송 주소 *", placeholder="서울시 강남구 테헤란로 123", key=f"gr_{rid}_address")
+                st.caption("원하는 상품의 수량을 입력해주세요. (0박스 = 제외)")
+                for prod in products:
+                    st.number_input(f"{prod} (박스)", min_value=0, max_value=99,
+                                    value=0, step=1, key=f"gr_{rid}_qty_{prod}")
+                st.text_input("배송 메모 (선택)", placeholder="경비실 맡겨주세요",
+                              key=f"gr_{rid}_memo")
+
+            if idx < len(rec_ids) - 1:
+                st.markdown("---")
+
+        if st.button("➕ 받는 분 추가", use_container_width=False):
+            new_id = st.session_state["gift_rec_next_id"]
+            st.session_state["gift_rec_ids"].append(new_id)
+            st.session_state["gift_rec_next_id"] += 1
+            st.rerun()
+
         sender_name    = orderer_name
         sender_phone   = orderer_phone
         sender_address = orderer_address
-        recipients = [
-            {"name": gift_name, "phone": gift_phone, "address": gift_address,
-             "product": prod, "qty": qty, "memo": memo}
-            for prod, qty in qtys.items() if qty > 0
-        ]
+        recipients = []
+        for rid in st.session_state["gift_rec_ids"]:
+            r_name    = st.session_state.get(f"gr_{rid}_name",    "")
+            r_phone   = st.session_state.get(f"gr_{rid}_phone",   "")
+            r_address = st.session_state.get(f"gr_{rid}_address", "")
+            r_memo    = st.session_state.get(f"gr_{rid}_memo",    "")
+            for prod in products:
+                qty = st.session_state.get(f"gr_{rid}_qty_{prod}", 0)
+                if qty > 0:
+                    recipients.append({
+                        "name": r_name, "phone": r_phone,
+                        "address": r_address, "product": prod,
+                        "qty": qty, "memo": r_memo,
+                    })
+
+    # ── 총 결제금액 합산 ──
+    if prices and recipients:
+        total_amount = sum(prices.get(r["product"], 0) * r["qty"] for r in recipients)
+        if total_amount > 0:
+            st.markdown(
+                f"<div style='background:#fff3e0;border:2px solid #ff9800;"
+                f"border-radius:12px;padding:1rem 1.5rem;margin:1rem 0;text-align:center;'>"
+                f"<div style='color:#bf360c;font-size:0.9rem;margin-bottom:0.3rem;'>"
+                f"💰 총 결제금액 (전체 합산)</div>"
+                f"<div style='color:#e65100;font-size:2rem;font-weight:bold;'>"
+                f"{total_amount:,}원</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
     # ── 계좌 안내 ──
     st.markdown("---")
@@ -1425,11 +1507,12 @@ def main():
     # 설정 및 상품 목록 로드 (캐시 활용)
     settings = load_settings()
     products = load_products()
+    prices   = load_product_prices()
 
     if is_admin:
         render_admin_page(settings, products)
     else:
-        render_customer_page(settings, products)
+        render_customer_page(settings, products, prices)
 
 
 if __name__ == "__main__":
