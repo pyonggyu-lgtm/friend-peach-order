@@ -644,13 +644,14 @@ def render_sidebar() -> bool:
         # ── 비밀번호 미입력: 고객 모드 ──
         if not pw:
             st.markdown(
-                """<div style='background:#e8f5e9;border:2px solid #43a047;
-                border-radius:10px;padding:12px 14px;text-align:center;margin:10px 0;'>
-                    <div style='font-size:0.75rem;color:#2e7d32;margin-bottom:4px;'>현재 모드</div>
-                    <div style='font-size:1.15rem;font-weight:bold;color:#1b5e20;'>🏠 고객 모드</div>
-                    <div style='font-size:0.72rem;color:#388e3c;margin-top:6px;'>
-                    관리자 전환 → 위 칸에 비밀번호 입력
-                    </div>
+                """<div style='background:#1b5e20;border-radius:10px;
+                padding:14px 16px;text-align:center;margin:10px 0;'>
+                    <div style='font-size:0.72rem;color:rgba(255,255,255,0.75);
+                    margin-bottom:5px;letter-spacing:1px;'>현재 모드</div>
+                    <div style='font-size:1.25rem;font-weight:900;color:#ffffff;'>
+                    🏠 고객 모드</div>
+                    <div style='font-size:0.73rem;color:rgba(255,255,255,0.85);
+                    margin-top:7px;'>관리자 전환 → 위 칸에 비밀번호 입력</div>
                 </div>""",
                 unsafe_allow_html=True,
             )
@@ -668,15 +669,16 @@ def render_sidebar() -> bool:
         if pw == correct_pw:
             # 관리자 인증 완료 — force_customer 여부로 분기
             if st.session_state.get("force_customer"):
-                # ── 현재: 고객 모드 (관리자 로그인은 된 상태) ──
+                # ── 현재: 고객 모드 (관리자 인증 완료 상태) ──
                 st.markdown(
-                    """<div style='background:#e8f5e9;border:2px solid #43a047;
-                    border-radius:10px;padding:12px 14px;text-align:center;margin:10px 0;'>
-                        <div style='font-size:0.75rem;color:#2e7d32;margin-bottom:4px;'>현재 모드</div>
-                        <div style='font-size:1.15rem;font-weight:bold;color:#1b5e20;'>🏠 고객 모드</div>
-                        <div style='font-size:0.72rem;color:#388e3c;margin-top:4px;'>
-                        ✅ 관리자 인증 완료 · 아래 버튼으로 전환
-                        </div>
+                    """<div style='background:#1b5e20;border-radius:10px;
+                    padding:14px 16px;text-align:center;margin:10px 0;'>
+                        <div style='font-size:0.72rem;color:rgba(255,255,255,0.75);
+                        margin-bottom:5px;letter-spacing:1px;'>현재 모드</div>
+                        <div style='font-size:1.25rem;font-weight:900;color:#ffffff;'>
+                        🏠 고객 모드</div>
+                        <div style='font-size:0.73rem;color:rgba(255,255,255,0.85);
+                        margin-top:7px;'>✅ 관리자 인증 완료 · 아래 버튼으로 전환</div>
                     </div>""",
                     unsafe_allow_html=True,
                 )
@@ -689,13 +691,14 @@ def render_sidebar() -> bool:
             else:
                 # ── 현재: 관리자 모드 ──
                 st.markdown(
-                    """<div style='background:#ffebee;border:2px solid #e53935;
-                    border-radius:10px;padding:12px 14px;text-align:center;margin:10px 0;'>
-                        <div style='font-size:0.75rem;color:#b71c1c;margin-bottom:4px;'>현재 모드</div>
-                        <div style='font-size:1.15rem;font-weight:bold;color:#b71c1c;'>🔧 관리자 모드</div>
-                        <div style='font-size:0.72rem;color:#c62828;margin-top:4px;'>
-                        ✅ 로그인 완료 · 아래 버튼으로 전환
-                        </div>
+                    """<div style='background:#7f0000;border-radius:10px;
+                    padding:14px 16px;text-align:center;margin:10px 0;'>
+                        <div style='font-size:0.72rem;color:rgba(255,255,255,0.75);
+                        margin-bottom:5px;letter-spacing:1px;'>현재 모드</div>
+                        <div style='font-size:1.25rem;font-weight:900;color:#ffffff;'>
+                        🔧 관리자 모드</div>
+                        <div style='font-size:0.73rem;color:rgba(255,255,255,0.85);
+                        margin-top:7px;'>✅ 로그인 완료 · 아래 버튼으로 전환</div>
                     </div>""",
                     unsafe_allow_html=True,
                 )
@@ -707,10 +710,12 @@ def render_sidebar() -> bool:
         else:
             # ── 비밀번호 틀림: 고객 모드 유지 ──
             st.markdown(
-                """<div style='background:#e8f5e9;border:2px solid #43a047;
-                border-radius:10px;padding:12px 14px;text-align:center;margin:10px 0;'>
-                    <div style='font-size:0.75rem;color:#2e7d32;margin-bottom:4px;'>현재 모드</div>
-                    <div style='font-size:1.15rem;font-weight:bold;color:#1b5e20;'>🏠 고객 모드</div>
+                """<div style='background:#1b5e20;border-radius:10px;
+                padding:14px 16px;text-align:center;margin:10px 0;'>
+                    <div style='font-size:0.72rem;color:rgba(255,255,255,0.75);
+                    margin-bottom:5px;letter-spacing:1px;'>현재 모드</div>
+                    <div style='font-size:1.25rem;font-weight:900;color:#ffffff;'>
+                    🏠 고객 모드</div>
                 </div>""",
                 unsafe_allow_html=True,
             )
