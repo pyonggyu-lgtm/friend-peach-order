@@ -1031,11 +1031,14 @@ def render_admin_orders():
         use_container_width=True,
         num_rows="fixed",
         column_config={
-            "순번": st.column_config.NumberColumn("순번", disabled=True),
+            "순번":           st.column_config.NumberColumn("순번",           disabled=True),
+            "주문자이름":     st.column_config.TextColumn("보내는분이름",     disabled=True),
+            "주문자전화번호": st.column_config.TextColumn("보내는분전화번호", disabled=True),
+            "주문자주소":     st.column_config.TextColumn("보내는분주소",     disabled=True),
             "상태": st.column_config.SelectboxColumn(
                 "상태",
                 options=["대기", "확인", "발송완료"],
-            )
+            ),
         },
         key="orders_editor",
     )
