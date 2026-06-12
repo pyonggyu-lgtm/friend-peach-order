@@ -81,7 +81,6 @@ import io
 import random
 import string
 import re
-import time
 
 # =============================================================================
 # 페이지 기본 설정
@@ -289,6 +288,7 @@ def get_sheet(name: str):
 # 설정 시트 읽기 / 쓰기
 # =============================================================================
 
+@st.cache_data(ttl=60)
 def load_settings() -> dict:
     """
     '설정' 시트에서 key|value 형태로 설정값을 읽습니다.
@@ -351,12 +351,7 @@ def load_products() -> list:
     sheet = get_sheet("상품목록")
     if sheet is None:
         # 시트 연결 전 기본 상품 (데모용)
-        return [
-            "복숭아 4kg 일반용",
-            "복숭아 4kg 선물용",
-            "복숭아 10kg 일반용",
-            "복숭아 10kg 선물용",
-        ]
+        return ["복숭아 4kg 일반용", "복숭아 4kg 선물용"]
     try:
         rows = sheet.get_all_values()
         # 1행은 헤더(상품명|단가|설명), 2행부터 데이터
@@ -388,22 +383,22 @@ def save_orders(order_rows: list) -> bool:
     try:
         existing = sheet.get_all_values()
         if not existing:
-            # 헤더 자동 생성
+            # 헤더 자동 생성 (12컬럼 — _submit_order와 동일한 스키마)
             header = [
-                "주문번호", "주문일시", "주문자이름", "주문자전화번호",
-                "보내는분이름", "보내는분전화번호", "보내는분주소",
+                "주문번호", "주문일시", "주문자이름", "주문자전화번호", "주문자주소",
                 "받는분이름", "받는분전화번호", "받는분주소",
                 "상품명", "수량", "배송메모", "상태",
             ]
             sheet.append_row(header)
-        for row in order_rows:
-            sheet.append_row(row)
+        # 한 번의 API 호출로 전체 행을 일괄 저장
+        sheet.append_rows(order_rows)
         return True
     except Exception as e:
         st.error(f"주문 저장 중 오류가 발생했습니다: {e}")
         return False
 
 
+@st.cache_data(ttl=30)
 def load_orders() -> pd.DataFrame:
     """'주문목록' 시트 전체를 DataFrame으로 반환합니다."""
     sheet = get_sheet("주문목록")
@@ -470,49 +465,6 @@ def send_email(to_addr: str, subject: str, body: str) -> bool:
         return False
 
 
-def send_confirmation_email(
-    orderer_name: str,
-    orderer_email: str,
-    order_number: str,
-    recipients: list,
-    settings: dict,
-    farm_name: str,
-):
-    """
-    주문 완료 후 주문자에게 확인 이메일을 발송합니다.
-    recipients: [{"name":..., "phone":..., "address":..., "product":..., "qty":..., "memo":...}]
-    """
-    rec_lines = ""
-    for i, r in enumerate(recipients, 1):
-        rec_lines += (
-            f"\n  [{i}번째 수령자]\n"
-            f"  이름: {r['name']}\n"
-            f"  전화: {r['phone']}\n"
-            f"  주소: {r['address']}\n"
-            f"  상품: {r['product']} × {r['qty']}박스\n"
-            f"  메모: {r.get('memo') or '없음'}\n"
-        )
-
-    body = (
-        f"안녕하세요, {orderer_name}님! 🍑\n\n"
-        f"{farm_name} 주문이 접수되었습니다.\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"주문번호: {order_number}\n"
-        f"주문일시: {datetime.now().strftime('%Y년 %m월 %d일 %H:%M')}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"【 수령자 정보 】\n{rec_lines}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"【 입금 안내 】\n"
-        f"은행: {settings.get('bank', '농협')}\n"
-        f"계좌: {settings.get('account_number', '000-0000-0000')}\n"
-        f"예금주: {settings.get('holder', '장명숙')}\n\n"
-        f"※ 입금자명을 주문자 성함으로 해주세요.\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"맛있는 복숭아로 보답하겠습니다! 🍑\n{farm_name} 드림"
-    )
-    send_email(orderer_email, f"[{farm_name}] 주문 접수 확인 - {order_number}", body)
-
-
 # =============================================================================
 # 주문 기간 판단
 # =============================================================================
@@ -565,11 +517,6 @@ def format_countdown(end_dt: datetime) -> str:
 def validate_phone(phone: str) -> bool:
     """전화번호 형식 검증: 010-XXXX-XXXX"""
     return bool(re.match(r"^010-\d{3,4}-\d{4}$", phone.strip()))
-
-
-def validate_email_addr(email: str) -> bool:
-    """이메일 형식 검증"""
-    return bool(re.match(r"^[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}$", email.strip()))
 
 
 # =============================================================================
@@ -831,7 +778,8 @@ def render_customer_page(settings: dict, products: list):
         errors = _validate_order(
             orderer_name, orderer_phone,
             sender_name, sender_phone, sender_address,
-            recipients
+            recipients,
+            same_person=("우리집" in order_type),
         )
         if errors:
             for err in errors:
@@ -844,37 +792,38 @@ def render_customer_page(settings: dict, products: list):
             )
 
 
-def _validate_order(orderer_name, orderer_phone, sender_name, sender_phone, sender_address, recipients) -> list:
-    """주문 폼 전체 유효성 검사. 오류 메시지 리스트 반환."""
+def _validate_order(orderer_name, orderer_phone, sender_name, sender_phone, sender_address, recipients, same_person=False) -> list:
+    """
+    주문 폼 전체 유효성 검사. 오류 메시지 리스트 반환.
+    same_person=True: '우리집 배달' 모드 — 주문자=보내는분=받는분이라 중복 검증 생략.
+    """
     errors = []
-    # 주문자 검증
+    # 주문자 검증 (항상)
     if not orderer_name.strip():
-        errors.append("❗ 주문자 이름을 입력해주세요.")
+        errors.append("❗ 이름을 입력해주세요." if same_person else "❗ 주문자 이름을 입력해주세요.")
     if not orderer_phone.strip():
-        errors.append("❗ 주문자 전화번호를 입력해주세요.")
+        errors.append("❗ 전화번호를 입력해주세요." if same_person else "❗ 주문자 전화번호를 입력해주세요.")
     elif not validate_phone(orderer_phone):
-        errors.append("❗ 주문자 전화번호 형식이 올바르지 않습니다. (예: 010-1234-5678)")
-    # 보내는 분 검증
-    if not sender_name.strip():
-        errors.append("❗ 보내는 분 이름을 입력해주세요.")
-    if not sender_phone.strip():
-        errors.append("❗ 보내는 분 전화번호를 입력해주세요.")
-    elif not validate_phone(sender_phone):
-        errors.append("❗ 보내는 분 전화번호 형식이 올바르지 않습니다.")
-    if not sender_address.strip():
-        errors.append("❗ 보내는 분 주소를 입력해주세요.")
+        errors.append("❗ 전화번호 형식이 올바르지 않습니다. (예: 010-1234-5678)")
 
-    for i, rec in enumerate(recipients, 1):
-        if not rec["name"].strip():
-            errors.append(f"❗ {i}번째 받는 분의 이름을 입력해주세요.")
-        if not rec["phone"].strip():
-            errors.append(f"❗ {i}번째 받는 분의 전화번호를 입력해주세요.")
-        elif not validate_phone(rec["phone"]):
-            errors.append(f"❗ {i}번째 받는 분의 전화번호 형식이 올바르지 않습니다.")
-        if not rec["address"].strip():
-            errors.append(f"❗ {i}번째 받는 분의 주소를 입력해주세요.")
-        if not rec.get("product"):
-            errors.append(f"❗ {i}번째 받는 분의 상품을 선택해주세요.")
+    # 주소 검증 (항상)
+    if not sender_address.strip():
+        errors.append("❗ 배송 주소를 입력해주세요.")
+
+    if not same_person:
+        # 선물 모드: 받는 분 별도 검증 (주문자와 다른 사람)
+        for i, rec in enumerate(recipients, 1):
+            prefix = f"❗ {i}번째 받는 분의 " if len(recipients) > 1 else "❗ 받는 분의 "
+            if not rec["name"].strip():
+                errors.append(f"{prefix}이름을 입력해주세요.")
+            if not rec["phone"].strip():
+                errors.append(f"{prefix}전화번호를 입력해주세요.")
+            elif not validate_phone(rec["phone"]):
+                errors.append(f"{prefix}전화번호 형식이 올바르지 않습니다.")
+            if not rec["address"].strip():
+                errors.append(f"{prefix}주소를 입력해주세요.")
+            if not rec.get("product"):
+                errors.append(f"{prefix}상품을 선택해주세요.")
     return errors
 
 
@@ -905,6 +854,7 @@ def _submit_order(orderer_name, orderer_phone, sender_name, sender_phone, sender
         success = save_orders(rows)
 
     if success:
+        load_orders.clear()   # 관리자 화면에서 즉시 새 주문을 볼 수 있도록 캐시 클리어
         st.session_state["order_complete"] = True
         st.session_state["order_result"]   = {
             "order_number": order_number,
@@ -1006,7 +956,8 @@ def render_admin_orders():
         return
 
     # ── 지표 ──
-    total    = len(df)
+    # "전체 주문"은 고유 주문번호 기준 (상품 2개 주문해도 1건으로 카운트)
+    total    = int(df["주문번호"].nunique()) if "주문번호" in df.columns else len(df)
     waiting  = int((df["상태"] == "대기").sum())    if "상태" in df.columns else 0
     confirm  = int((df["상태"] == "확인").sum())    if "상태" in df.columns else 0
     shipped  = int((df["상태"] == "발송완료").sum()) if "상태" in df.columns else 0
@@ -1020,12 +971,39 @@ def render_admin_orders():
     _metric_card(c5, "취소",      canceled, "#9e9e9e")
 
     st.markdown("---")
-    st.caption("아래 표에서 '상태' 열을 직접 클릭하여 수정할 수 있습니다.")
+
+    # ── 검색 + 상태 필터 ──
+    fc1, fc2 = st.columns([2, 1])
+    with fc1:
+        search_name = st.text_input("🔍 이름 검색", placeholder="주문자 또는 받는 분 이름", key="order_search")
+    with fc2:
+        status_view = st.multiselect(
+            "상태 필터",
+            options=["대기", "확인", "발송완료", "취소"],
+            default=["대기", "확인", "발송완료", "취소"],
+            key="order_status_filter",
+        )
 
     # ── 상태 값 정리 (잘못된 값은 "대기"로 초기화) ──
     valid_statuses = ["대기", "확인", "발송완료", "취소"]
     if "상태" in df.columns:
         df["상태"] = df["상태"].apply(lambda x: x if x in valid_statuses else "대기")
+
+    # ── 검색 + 상태 필터 적용 ──
+    if search_name.strip():
+        mask = pd.Series(False, index=df.index)
+        for col in ["주문자이름", "받는분이름"]:
+            if col in df.columns:
+                mask |= df[col].str.contains(search_name.strip(), na=False)
+        df = df[mask]
+    if status_view and "상태" in df.columns:
+        df = df[df["상태"].isin(status_view)]
+
+    # ── 최신순 정렬 ──
+    if "주문일시" in df.columns:
+        df = df.sort_values("주문일시", ascending=False)
+
+    st.caption(f"표시: **{df['주문번호'].nunique() if '주문번호' in df.columns else len(df)}건** | 아래 표에서 '상태' 열을 직접 클릭하여 수정할 수 있습니다.")
 
     # ── 주문 순번 컬럼 추가 (같은 주문번호 = 같은 순번) ──
     if "주문번호" in df.columns:
@@ -1058,15 +1036,20 @@ def render_admin_orders():
             if sheet:
                 saved = 0
                 try:
+                    # 시트 헤더에서 '상태' 열 번호를 동적으로 계산 (1-indexed)
+                    orig_cols = [c for c in df.columns if c != "순번"]
+                    status_col = (orig_cols.index("상태") + 1) if "상태" in orig_cols else 12
                     for idx in range(len(df)):
                         orig = df.iloc[idx]["상태"] if "상태" in df.columns else ""
                         new  = edited_df.iloc[idx]["상태"]
                         if orig != new:
-                            sheet.update_cell(idx + 2, 12, new)  # 헤더행=1, 데이터=2+
+                            # idx + 2: 헤더행(1) + 데이터 시작(2)
+                            sheet.update_cell(idx + 2, status_col, new)
                             saved += 1
                     if saved:
                         st.success(f"✅ {saved}건의 상태를 저장했습니다.")
-                        st.cache_resource.clear()
+                        load_orders.clear()   # 캐시 초기화 → 다음 로드 시 최신 데이터
+                        st.rerun()
                     else:
                         st.info("변경된 항목이 없습니다.")
                 except Exception as e:
@@ -1075,7 +1058,7 @@ def render_admin_orders():
                 st.error("Google Sheets 연결 실패")
 
     with col_dl:
-        csv_bytes = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+        csv_bytes = df.to_csv(index=False).encode("utf-8-sig")  # BOM은 encode 시 한 번만
         st.download_button(
             "📥 CSV 다운로드",
             data=csv_bytes,
@@ -1124,7 +1107,9 @@ def render_admin_period(settings: dict):
             settings["order_start"] = f"{start_date} {start_time.strftime('%H:%M')}"
             settings["order_end"]   = f"{end_date} {end_time.strftime('%H:%M')}"
             if save_settings(settings):
+                load_settings.clear()
                 st.success("✅ 주문 기간이 저장되었습니다.")
+                st.rerun()
             else:
                 st.error("저장에 실패했습니다. Google Sheets 연결을 확인해주세요.")
 
@@ -1134,7 +1119,9 @@ def render_admin_period(settings: dict):
             settings["order_start"] = now.strftime("%Y-%m-%d %H:%M")
             settings["order_end"]   = (now + timedelta(days=7)).strftime("%Y-%m-%d %H:%M")
             if save_settings(settings):
+                load_settings.clear()
                 st.success("✅ 주문이 열렸습니다! (7일 후 자동 마감)")
+                st.rerun()
             else:
                 st.error("저장 실패")
 
@@ -1143,7 +1130,9 @@ def render_admin_period(settings: dict):
             past = datetime.now() - timedelta(minutes=1)
             settings["order_end"] = past.strftime("%Y-%m-%d %H:%M")
             if save_settings(settings):
+                load_settings.clear()
                 st.success("✅ 주문이 마감되었습니다.")
+                st.rerun()
             else:
                 st.error("저장 실패")
 
@@ -1166,7 +1155,7 @@ def render_admin_logen(settings: dict):
     with col1:
         status_filter = st.multiselect(
             "상태 필터",
-            options=["대기", "확인", "발송완료"],
+            options=["대기", "확인", "발송완료", "취소"],
             default=["대기", "확인"],
             key="logen_status",
         )
@@ -1230,13 +1219,27 @@ def render_admin_logen(settings: dict):
             if sheet:
                 try:
                     all_rows = sheet.get_all_values()
-                    target_ids = set(filtered["주문번호"].tolist())
-                    updated = 0
-                    for row_idx, row in enumerate(all_rows[1:], start=2):
-                        if row[0] in target_ids and row[11] not in ("발송완료", "취소"):
-                            sheet.update_cell(row_idx, 12, "발송완료")
-                            updated += 1
-                    st.success(f"✅ {updated}건을 '발송완료' 처리했습니다.")
+                    if not all_rows:
+                        st.warning("시트가 비어있습니다.")
+                    else:
+                        # 헤더에서 '상태' 열 번호를 동적으로 계산
+                        headers = all_rows[0]
+                        status_col = (headers.index("상태") + 1) if "상태" in headers else 12
+                        status_idx = status_col - 1  # 0-indexed for list access
+                        target_ids = set(filtered["주문번호"].tolist())
+                        updated = 0
+                        for row_idx, row in enumerate(all_rows[1:], start=2):
+                            if (len(row) > status_idx
+                                    and row[0] in target_ids
+                                    and row[status_idx] not in ("발송완료", "취소")):
+                                sheet.update_cell(row_idx, status_col, "발송완료")
+                                updated += 1
+                        if updated:
+                            st.success(f"✅ {updated}건을 '발송완료' 처리했습니다.")
+                            load_orders.clear()
+                            st.rerun()
+                        else:
+                            st.info("변경할 항목이 없습니다. (이미 발송완료/취소 상태)")
                 except Exception as e:
                     st.error(f"처리 실패: {e}")
             else:
@@ -1323,7 +1326,9 @@ def render_admin_settings(settings: dict):
             "farm_phone":     new_phone,
         })
         if save_settings(settings):
+            load_settings.clear()
             st.success("✅ 설정이 저장되었습니다.")
+            st.rerun()
         else:
             st.error("저장 실패. Google Sheets 연결을 확인해주세요.")
 
