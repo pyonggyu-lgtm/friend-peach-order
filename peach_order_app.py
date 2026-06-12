@@ -1006,22 +1006,24 @@ def render_admin_orders():
         return
 
     # ── 지표 ──
-    total   = len(df)
-    waiting = int((df["상태"] == "대기").sum())    if "상태" in df.columns else 0
-    confirm = int((df["상태"] == "확인").sum())    if "상태" in df.columns else 0
-    shipped = int((df["상태"] == "발송완료").sum()) if "상태" in df.columns else 0
+    total    = len(df)
+    waiting  = int((df["상태"] == "대기").sum())    if "상태" in df.columns else 0
+    confirm  = int((df["상태"] == "확인").sum())    if "상태" in df.columns else 0
+    shipped  = int((df["상태"] == "발송완료").sum()) if "상태" in df.columns else 0
+    canceled = int((df["상태"] == "취소").sum())    if "상태" in df.columns else 0
 
-    c1, c2, c3, c4 = st.columns(4)
-    _metric_card(c1, "전체 주문", total,   "#ff8c42")
-    _metric_card(c2, "대기",      waiting, "#ffc107")
-    _metric_card(c3, "확인",      confirm, "#2196f3")
-    _metric_card(c4, "발송완료",  shipped, "#4caf50")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    _metric_card(c1, "전체 주문", total,    "#ff8c42")
+    _metric_card(c2, "대기",      waiting,  "#ffc107")
+    _metric_card(c3, "확인",      confirm,  "#2196f3")
+    _metric_card(c4, "발송완료",  shipped,  "#4caf50")
+    _metric_card(c5, "취소",      canceled, "#9e9e9e")
 
     st.markdown("---")
     st.caption("아래 표에서 '상태' 열을 직접 클릭하여 수정할 수 있습니다.")
 
     # ── 상태 값 정리 (잘못된 값은 "대기"로 초기화) ──
-    valid_statuses = ["대기", "확인", "발송완료"]
+    valid_statuses = ["대기", "확인", "발송완료", "취소"]
     if "상태" in df.columns:
         df["상태"] = df["상태"].apply(lambda x: x if x in valid_statuses else "대기")
 
@@ -1043,7 +1045,7 @@ def render_admin_orders():
             "주문자주소":     st.column_config.TextColumn("보내는분주소",     disabled=True),
             "상태": st.column_config.SelectboxColumn(
                 "상태",
-                options=["대기", "확인", "발송완료"],
+                options=["대기", "확인", "발송완료", "취소"],
             ),
         },
         key="orders_editor",
@@ -1231,7 +1233,7 @@ def render_admin_logen(settings: dict):
                     target_ids = set(filtered["주문번호"].tolist())
                     updated = 0
                     for row_idx, row in enumerate(all_rows[1:], start=2):
-                        if row[0] in target_ids and row[11] != "발송완료":
+                        if row[0] in target_ids and row[11] not in ("발송완료", "취소"):
                             sheet.update_cell(row_idx, 12, "발송완료")
                             updated += 1
                     st.success(f"✅ {updated}건을 '발송완료' 처리했습니다.")
