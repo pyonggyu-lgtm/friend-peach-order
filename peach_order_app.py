@@ -763,6 +763,7 @@ def render_customer_page(settings: dict, products: list):
         sender_name    = orderer_name
         sender_phone   = orderer_phone
         sender_address = address
+        orderer_address = address
         recipients = [
             {"name": orderer_name, "phone": orderer_phone, "address": address,
              "product": prod, "qty": qty, "memo": memo}
