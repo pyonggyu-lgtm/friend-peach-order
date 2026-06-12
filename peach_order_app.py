@@ -946,16 +946,26 @@ def _render_order_complete(settings: dict, farm_name: str):
         unsafe_allow_html=True,
     )
 
-    # 주문 내역 요약
+    # 주문 내역 요약 — 같은 수령자의 상품을 묶어서 표시
     st.markdown("#### 📋 주문 내역 요약")
-    for i, rec in enumerate(recipients, 1):
-        memo_html = f"<div>배송메모: {rec.get('memo','')}</div>" if rec.get("memo") else ""
+    grouped = {}
+    for rec in recipients:
+        key = (rec["name"], rec["phone"], rec["address"])
+        if key not in grouped:
+            grouped[key] = {"name": rec["name"], "phone": rec["phone"],
+                            "address": rec["address"], "memo": rec.get("memo", ""), "products": []}
+        grouped[key]["products"].append(f"{rec['product']} × {rec['qty']}박스")
+
+    for i, info in enumerate(grouped.values(), 1):
+        products_html = "".join(f"<div>상품: {p}</div>" for p in info["products"])
+        memo_html = f"<div>배송메모: {info['memo']}</div>" if info["memo"] else ""
+        label = f"📮 수령자: {info['name']}" if len(grouped) == 1 else f"📮 {i}번째 수령자: {info['name']}"
         st.markdown(
             f"<div class='recipient-box'>"
-            f"<div class='recipient-box-title'>📮 {i}번째 수령자: {rec['name']}</div>"
-            f"<div>전화번호: {rec['phone']}</div>"
-            f"<div>주소: {rec['address']}</div>"
-            f"<div>상품: {rec['product']} × {rec['qty']}박스</div>"
+            f"<div class='recipient-box-title'>{label}</div>"
+            f"<div>전화번호: {info['phone']}</div>"
+            f"<div>주소: {info['address']}</div>"
+            f"{products_html}"
             f"{memo_html}"
             f"</div>",
             unsafe_allow_html=True,
