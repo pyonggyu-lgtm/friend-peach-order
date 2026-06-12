@@ -1010,6 +1010,11 @@ def render_admin_orders():
     st.markdown("---")
     st.caption("아래 표에서 '상태' 열을 직접 클릭하여 수정할 수 있습니다.")
 
+    # ── 상태 값 정리 (잘못된 값은 "대기"로 초기화) ──
+    valid_statuses = ["대기", "확인", "발송완료"]
+    if "상태" in df.columns:
+        df["상태"] = df["상태"].apply(lambda x: x if x in valid_statuses else "대기")
+
     # ── 편집 가능한 데이터 테이블 ──
     edited_df = st.data_editor(
         df,
@@ -1019,7 +1024,6 @@ def render_admin_orders():
             "상태": st.column_config.SelectboxColumn(
                 "상태",
                 options=["대기", "확인", "발송완료"],
-                required=True,
             )
         },
         key="orders_editor",
