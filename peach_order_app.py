@@ -99,6 +99,19 @@ st.set_page_config(
     initial_sidebar_state="auto",
 )
 
+# 스마트폰 핀치줌(두 손가락 확대) 허용
+st.markdown("""
+<script>
+(function() {
+    var vp = document.querySelector('meta[name="viewport"]');
+    if (vp) {
+        vp.setAttribute('content',
+            'width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes');
+    }
+})();
+</script>
+""", unsafe_allow_html=True)
+
 # =============================================================================
 # 전체 테마 CSS — 따뜻한 복숭아 색상
 # =============================================================================
@@ -134,8 +147,22 @@ st.markdown("""
     margin-bottom: 1.5rem;
     box-shadow: 0 4px 20px rgba(255,107,26,0.3);
 }
-.peach-header h1 { font-size: 2.2rem; margin: 0; text-shadow: 1px 1px 3px rgba(0,0,0,0.2); }
-.peach-header p  { margin: 0.5rem 0 0 0; opacity: 0.9; font-size: 1.05rem; }
+.peach-header h1 {
+    font-size: clamp(1.25rem, 5vw, 2.2rem);
+    margin: 0;
+    line-height: 1.35;
+    word-break: keep-all;
+    text-shadow: 1px 1px 3px rgba(0,0,0,0.2);
+}
+.peach-header .admin-sub {
+    display: block;
+    font-size: 0.65em;
+    font-weight: 600;
+    opacity: 0.88;
+    letter-spacing: 2px;
+    margin-top: 2px;
+}
+.peach-header p  { margin: 0.5rem 0 0 0; opacity: 0.9; font-size: clamp(0.85rem, 3vw, 1.05rem); word-break: keep-all; }
 
 /* ── 카드 ── */
 .peach-card {
@@ -237,8 +264,7 @@ st.markdown("""
 
 /* ── 모바일 반응형 ── */
 @media (max-width: 768px) {
-    .peach-header h1 { font-size: 1.5rem; }
-    .peach-header p  { font-size: 0.9rem; }
+    .peach-header { padding: 1.3rem 1rem; }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -622,11 +648,20 @@ def generate_logen_excel(df: pd.DataFrame, farm_name: str, settings: dict) -> by
     주문 DataFrame을 로젠택배 업로드 양식 엑셀로 변환합니다.
     컬럼 순서: 받는분성명/받는분주소/받는분전화번호/품목/박스수량/
               보내는분성명/보내는분주소/보내는분전화번호/배송메세지
+    취소 상태는 자동으로 제외됩니다.
     """
     try:
         farm_phone = st.secrets["app"]["farm_phone"]
     except Exception:
         farm_phone = settings.get("farm_phone", "")
+
+    # ── 취소 상태 자동 제외 ──
+    if "상태" in df.columns:
+        df = df[df["상태"] != "취소"].copy()
+
+    # ── 수량 안전 변환 (시트에서 문자열로 읽힌 경우 대비) ──
+    if "수량" in df.columns:
+        df["수량"] = pd.to_numeric(df["수량"], errors="coerce").fillna(1).astype(int)
 
     n = len(df)
     logen_df = pd.DataFrame({
@@ -842,6 +877,47 @@ def render_customer_page(settings: dict, products: list, prices: dict = None):
             f"</div>",
             unsafe_allow_html=True,
         )
+
+        # ── 배송 조회 (마감 후에도 이용 가능) ──
+        st.markdown("---")
+        st.markdown("#### 📦 주문번호로 배송 조회")
+        query_no = st.text_input(
+            "주문번호 입력",
+            placeholder="예: PEACH-20260613-ABC123",
+            key="track_order_no",
+        )
+        if st.button("🔍 조회", key="track_btn"):
+            if not query_no.strip():
+                st.warning("주문번호를 입력해주세요.")
+            else:
+                df_all = load_orders()
+                if df_all.empty or "주문번호" not in df_all.columns:
+                    st.error("주문 데이터를 불러올 수 없습니다.")
+                else:
+                    hit = df_all[df_all["주문번호"].str.strip() == query_no.strip()]
+                    if hit.empty:
+                        st.error("해당 주문번호를 찾을 수 없습니다. 주문번호를 다시 확인해주세요.")
+                    else:
+                        st.success(f"✅ 주문번호 **{query_no.strip()}** 조회 결과")
+                        for _, row in hit.iterrows():
+                            status_emoji = {
+                                "대기": "⏳", "입금확인": "💳", "확인": "💳",
+                                "배송준비": "📦", "배송중": "🚚", "발송완료": "🚚",
+                                "배송완료": "✅", "취소": "❌",
+                            }.get(row.get("상태", ""), "📋")
+                            st.markdown(
+                                f"<div class='recipient-box'>"
+                                f"<div class='recipient-box-title'>"
+                                f"받는분: {row.get('받는분이름','')}"
+                                f"</div>"
+                                f"<div>상품: {row.get('상품명','')} {row.get('수량','')}박스</div>"
+                                f"<div>주소: {row.get('받는분주소','')}</div>"
+                                f"<div>현재 상태: {status_emoji} <strong>{row.get('상태','')}</strong></div>"
+                                f"<div style='font-size:0.82rem;color:#888;margin-top:4px;'>"
+                                f"주문일시: {row.get('주문일시','')}</div>"
+                                f"</div>",
+                                unsafe_allow_html=True,
+                            )
         return
 
     # ── 주문 접수 중: 카운트다운 표시 ──
@@ -1098,12 +1174,12 @@ def _submit_order(orderer_name, orderer_phone, sender_name, sender_phone, sender
         bank   = settings.get("bank",           "농협")
         acct   = settings.get("account_number", "000-0000-0000")
         holder = settings.get("holder",         "장명숙")
+        # SMS 90자 이내 유지 → SMS 요금 적용 (초과 시 LMS 자동 전환)
         sms_msg = (
-            f"[{farm_name}] 주문 접수 완료\n"
-            f"주문번호: {order_number}\n"
-            f"상품: {product_summary}\n"
-            f"입금: {bank} {acct} ({holder})\n"
-            f"입금 확인 후 발송 안내 드리겠습니다."
+            f"[복숭아농장] 주문완료\n"
+            f"번호:{order_number[-6:]}\n"
+            f"입금:{bank} {acct}({holder})\n"
+            f"입금확인 후 발송안내드립니다."
         )
         send_sms(orderer_phone, sms_msg)   # 실패해도 주문은 완료 처리
 
@@ -1210,17 +1286,29 @@ def render_admin_orders():
     # ── 지표 ──
     # "전체 주문"은 고유 주문번호 기준 (상품 2개 주문해도 1건으로 카운트)
     total    = int(df["주문번호"].nunique()) if "주문번호" in df.columns else len(df)
-    waiting  = int((df["상태"] == "대기").sum())    if "상태" in df.columns else 0
-    confirm  = int((df["상태"] == "확인").sum())    if "상태" in df.columns else 0
-    shipped  = int((df["상태"] == "발송완료").sum()) if "상태" in df.columns else 0
-    canceled = int((df["상태"] == "취소").sum())    if "상태" in df.columns else 0
+    waiting  = int((df["상태"] == "대기").sum())     if "상태" in df.columns else 0
+    confirm  = int((df["상태"] == "입금확인").sum()) if "상태" in df.columns else 0
+    shipped  = int((df["상태"].isin(["배송중","발송완료","배송완료"])).sum()) if "상태" in df.columns else 0
+    canceled = int((df["상태"] == "취소").sum())     if "상태" in df.columns else 0
 
-    c1, c2, c3, c4, c5 = st.columns(5)
-    _metric_card(c1, "전체 주문", total,    "#ff8c42")
-    _metric_card(c2, "대기",      waiting,  "#ffc107")
-    _metric_card(c3, "확인",      confirm,  "#2196f3")
-    _metric_card(c4, "발송완료",  shipped,  "#4caf50")
-    _metric_card(c5, "취소",      canceled, "#9e9e9e")
+    # ── 총매출 계산 (입금확인 + 배송 관련 상태 기준) ──
+    revenue = 0
+    prices  = load_product_prices()
+    if prices and "상품명" in df.columns and "수량" in df.columns and "상태" in df.columns:
+        paid_df = df[df["상태"].isin(["입금확인","배송준비","배송중","발송완료","배송완료"])].copy()
+        paid_df["수량_n"] = pd.to_numeric(paid_df["수량"], errors="coerce").fillna(0).astype(int)
+        paid_df["단가"]   = paid_df["상품명"].map(prices).fillna(0).astype(int)
+        revenue = int((paid_df["수량_n"] * paid_df["단가"]).sum())
+
+    revenue_str = f"{revenue:,}원" if revenue > 0 else "단가 미설정"
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    _metric_card(c1, "전체 주문",  total,        "#ff8c42")
+    _metric_card(c2, "대기",       waiting,      "#ffc107")
+    _metric_card(c3, "입금확인",   confirm,      "#2196f3")
+    _metric_card(c4, "배송완료",   shipped,      "#4caf50")
+    _metric_card(c5, "취소",       canceled,     "#9e9e9e")
+    _metric_card(c6, "총매출(입금)", revenue_str, "#7b1fa2")
 
     st.markdown("---")
 
@@ -1231,13 +1319,13 @@ def render_admin_orders():
     with fc2:
         status_view = st.multiselect(
             "상태 필터",
-            options=["대기", "확인", "발송완료", "취소"],
-            default=["대기", "확인", "발송완료", "취소"],
+            options=["대기", "입금확인", "배송준비", "배송중", "배송완료", "취소"],
+            default=["대기", "입금확인", "배송준비", "배송중", "배송완료", "취소"],
             key="order_status_filter",
         )
 
     # ── 상태 값 정리 (잘못된 값은 "대기"로 초기화) ──
-    valid_statuses = ["대기", "확인", "발송완료", "취소"]
+    valid_statuses = ["대기", "입금확인", "배송준비", "배송중", "배송완료", "취소"]
     if "상태" in df.columns:
         df["상태"] = df["상태"].apply(lambda x: x if x in valid_statuses else "대기")
 
@@ -1275,7 +1363,7 @@ def render_admin_orders():
             "주문자주소":     st.column_config.TextColumn("보내는분주소",     disabled=True),
             "상태": st.column_config.SelectboxColumn(
                 "상태",
-                options=["대기", "확인", "발송완료", "취소"],
+                options=["대기", "입금확인", "배송준비", "배송중", "배송완료", "취소"],
             ),
         },
         key="orders_editor",
@@ -1295,15 +1383,13 @@ def render_admin_orders():
                     else:
                         headers    = all_rows[0]
                         status_col = (headers.index("상태")      + 1) if "상태"      in headers else 12
-                        # (주문번호, 받는분이름, 상품명) 조합으로 시트 행 번호 룩업 테이블 생성
+                        # (주문번호, 받는분이름, 받는분전화번호, 상품명) 조합으로 시트 행 번호 룩업 테이블 생성
+                        # 전화번호 포함으로 동명이인·동일상품 다중수령 시 키 충돌 방지
                         col_idx = {h: i for i, h in enumerate(headers)}
                         lookup = {}
                         for row_i, row in enumerate(all_rows[1:], start=2):
-                            key = (
-                                row[col_idx["주문번호"]]   if "주문번호"   in col_idx and len(row) > col_idx["주문번호"]   else "",
-                                row[col_idx["받는분이름"]] if "받는분이름" in col_idx and len(row) > col_idx["받는분이름"] else "",
-                                row[col_idx["상품명"]]     if "상품명"     in col_idx and len(row) > col_idx["상품명"]     else "",
-                            )
+                            def _s(c): return row[col_idx[c]] if c in col_idx and len(row) > col_idx[c] else ""
+                            key = (_s("주문번호"), _s("받는분이름"), _s("받는분전화번호"), _s("상품명"))
                             lookup[key] = row_i
 
                         for idx in range(len(df)):
@@ -1313,9 +1399,10 @@ def render_admin_orders():
                                 continue
                             row_data = edited_df.iloc[idx]
                             key = (
-                                str(row_data.get("주문번호",   "")),
-                                str(row_data.get("받는분이름", "")),
-                                str(row_data.get("상품명",     "")),
+                                str(row_data.get("주문번호",         "")),
+                                str(row_data.get("받는분이름",       "")),
+                                str(row_data.get("받는분전화번호",   "")),
+                                str(row_data.get("상품명",           "")),
                             )
                             if key in lookup:
                                 sheet.update_cell(lookup[key], status_col, new_status)
@@ -1645,7 +1732,7 @@ def render_admin_settings(settings: dict):
 
     if st.button("설정 저장"):
         settings.update({
-            "bank":           new_bank,
+                        "bank":           new_bank,
             "holder":         new_holder,
             "account_number": new_acct,
             "farm_phone":     new_phone,
@@ -1701,7 +1788,7 @@ def render_admin_page(settings: dict, products: list):
     farm_name = _get_farm_name()
     st.markdown(
         f"<div class='peach-header'>"
-        f"<h1>{farm_name} 관리자</h1>"
+        f"<h1>{farm_name}<span class='admin-sub'>관리자 페이지</span></h1>"
         f"<p>주문 관리 및 운영 설정 페이지</p>"
         f"</div>",
         unsafe_allow_html=True,
