@@ -82,6 +82,13 @@ import random
 import string
 import re
 
+# CoolSMS — 설치 여부에 따라 동적 import
+try:
+    from coolsms import CoolSMS as _CoolSMS
+    _COOLSMS_AVAILABLE = True
+except ImportError:
+    _COOLSMS_AVAILABLE = False
+
 # =============================================================================
 # 페이지 기본 설정
 # =============================================================================
@@ -91,6 +98,33 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="auto",
 )
+
+# 스마트폰 핀치줌(두 손가락 확대) 허용
+# st.markdown의 <script>는 Streamlit이 보안상 차단하므로 components.html 사용
+import streamlit.components.v1 as _components
+_components.html("""
+<script>
+(function() {
+    var content = 'width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes';
+    function fix() {
+        try {
+            // components.html은 iframe 안에서 실행 → parent.document로 실제 페이지 접근
+            var meta = parent.document.querySelector('meta[name="viewport"]');
+            if (meta) {
+                meta.setAttribute('content', content);
+            } else {
+                var m = parent.document.createElement('meta');
+                m.name = 'viewport'; m.content = content;
+                parent.document.head.appendChild(m);
+            }
+        } catch(e) {}
+    }
+    fix();
+    setTimeout(fix, 300);
+    setTimeout(fix, 1000);
+})();
+</script>
+""", height=0)
 
 # =============================================================================
 # 전체 테마 CSS — 따뜻한 복숭아 색상
@@ -127,8 +161,22 @@ st.markdown("""
     margin-bottom: 1.5rem;
     box-shadow: 0 4px 20px rgba(255,107,26,0.3);
 }
-.peach-header h1 { font-size: 2.2rem; margin: 0; text-shadow: 1px 1px 3px rgba(0,0,0,0.2); }
-.peach-header p  { margin: 0.5rem 0 0 0; opacity: 0.9; font-size: 1.05rem; }
+.peach-header h1 {
+    font-size: clamp(1.25rem, 5vw, 2.2rem);
+    margin: 0;
+    line-height: 1.35;
+    word-break: keep-all;
+    text-shadow: 1px 1px 3px rgba(0,0,0,0.2);
+}
+.peach-header .admin-sub {
+    display: block;
+    font-size: 0.65em;
+    font-weight: 600;
+    opacity: 0.88;
+    letter-spacing: 2px;
+    margin-top: 2px;
+}
+.peach-header p  { margin: 0.5rem 0 0 0; opacity: 0.9; font-size: clamp(0.85rem, 3vw, 1.05rem); word-break: keep-all; }
 
 /* ── 카드 ── */
 .peach-card {
@@ -181,10 +229,18 @@ st.markdown("""
     border-radius: 12px;
     padding: 1rem;
     text-align: center;
-    font-size: 1.1rem;
+    font-size: clamp(0.9rem, 3.5vw, 1.1rem);
     color: #2e7d32;
     font-weight: bold;
     margin: 0.5rem 0;
+    word-break: keep-all;
+    line-height: 1.5;
+}
+/* ── 섹션 제목 (h3) 모바일 자연스러운 줄바꿈 ── */
+h3 {
+    word-break: keep-all;
+    line-height: 1.4;
+    font-size: clamp(1rem, 4vw, 1.4rem) !important;
 }
 
 /* ── 버튼 ── */
@@ -230,8 +286,7 @@ st.markdown("""
 
 /* ── 모바일 반응형 ── */
 @media (max-width: 768px) {
-    .peach-header h1 { font-size: 1.5rem; }
-    .peach-header p  { font-size: 0.9rem; }
+    .peach-header { padding: 1.3rem 1rem; }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -309,6 +364,7 @@ def load_settings() -> dict:
         "account_number": def_acct,
         "holder":         def_holder,
         "farm_phone":     "",
+        "farm_address":   "",
     }
 
     sheet = get_sheet("설정")
@@ -346,6 +402,7 @@ def save_settings(settings: dict) -> bool:
 # 상품 목록
 # =============================================================================
 
+@st.cache_data(ttl=60)
 def load_products() -> list:
     """'상품목록' 시트 A열(2행~)에서 상품명을 읽어 반환합니다."""
     sheet = get_sheet("상품목록")
@@ -390,9 +447,9 @@ def load_product_prices() -> dict:
 # =============================================================================
 
 def generate_order_number() -> str:
-    """주문번호 생성: PEACH-YYYYMMDD-XXXX (4자리 랜덤 숫자)"""
+    """주문번호 생성: PEACH-YYYYMMDD-XXXXXX (6자리 영숫자 대문자)"""
     today  = datetime.now().strftime("%Y%m%d")
-    suffix = "".join(random.choices(string.digits, k=4))
+    suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
     return f"PEACH-{today}-{suffix}"
 
 
@@ -432,7 +489,13 @@ def load_orders() -> pd.DataFrame:
         rows = sheet.get_all_values()
         if len(rows) < 2:
             return pd.DataFrame()
-        return pd.DataFrame(rows[1:], columns=rows[0])
+        df = pd.DataFrame(rows[1:], columns=rows[0])
+        # Google Sheets 사용 범위가 실제 데이터 범위를 초과할 경우
+        # 빈 이름 컬럼(Arrow 직렬화 오류 원인)과 빈 행을 제거
+        df = df[[c for c in df.columns if str(c).strip()]]
+        if "주문번호" in df.columns:
+            df = df[df["주문번호"].str.strip() != ""].reset_index(drop=True)
+        return df
     except Exception:
         return pd.DataFrame()
 
@@ -450,7 +513,9 @@ def load_customers() -> pd.DataFrame:
         rows = sheet.get_all_values()
         if len(rows) < 2:
             return pd.DataFrame(columns=["이름", "이메일", "전화번호"])
-        return pd.DataFrame(rows[1:], columns=rows[0])
+        df = pd.DataFrame(rows[1:], columns=rows[0])
+        df = df[[c for c in df.columns if str(c).strip()]]
+        return df
     except Exception:
         return pd.DataFrame(columns=["이름", "이메일", "전화번호"])
 
@@ -487,6 +552,58 @@ def send_email(to_addr: str, subject: str, body: str) -> bool:
     except Exception as e:
         st.warning(f"이메일 발송 실패 ({to_addr}): {e}")
         return False
+
+
+# =============================================================================
+# SMS 발송 (CoolSMS)
+# =============================================================================
+
+def send_sms(to_number: str, message: str) -> bool:
+    """
+    CoolSMS를 통해 SMS를 발송합니다.
+    secrets.toml의 [coolsms] api_key / api_secret / sender 를 사용합니다.
+
+    secrets.toml 설정 예시:
+        [coolsms]
+        api_key    = "NCSXXXXXXXXXXXXXX"
+        api_secret = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+        sender     = "01012345678"   # 발신번호 (CoolSMS에 등록된 번호)
+    """
+    if not _COOLSMS_AVAILABLE:
+        return False          # 패키지 미설치 시 조용히 스킵
+    try:
+        api_key    = st.secrets["coolsms"]["api_key"]
+        api_secret = st.secrets["coolsms"]["api_secret"]
+        sender     = st.secrets["coolsms"]["sender"]
+    except Exception:
+        return False          # secrets 미설정 시 스킵
+
+    try:
+        sms = _CoolSMS(api_key, api_secret)
+        sms.send({
+            "to":   re.sub(r"\D", "", to_number),   # 숫자만 전달
+            "from": re.sub(r"\D", "", sender),
+            "text": message,
+            "type": "SMS" if len(message) <= 90 else "LMS",
+        })
+        return True
+    except Exception as e:
+        st.warning(f"문자 발송 실패 ({to_number}): {e}")
+        return False
+
+
+def send_sms_bulk(numbers: list, message: str) -> tuple:
+    """
+    여러 번호에 동일 메시지를 일괄 발송합니다.
+    반환: (성공 건수, 실패 건수)
+    """
+    ok, fail = 0, 0
+    for num in numbers:
+        if send_sms(num, message):
+            ok += 1
+        else:
+            fail += 1
+    return ok, fail
 
 
 # =============================================================================
@@ -560,35 +677,89 @@ def _fmt_phone(key: str) -> None:
 def generate_logen_excel(df: pd.DataFrame, farm_name: str, settings: dict) -> bytes:
     """
     주문 DataFrame을 로젠택배 업로드 양식 엑셀로 변환합니다.
-    컬럼 순서: 받는분성명/받는분주소/받는분전화번호/품목/박스수량/
-              보내는분성명/보내는분주소/보내는분전화번호/배송메세지
+
+    행1 : 농장정보 텍스트 (A1 셀)
+    행2 : 컬럼 헤더 — 수하인이름/수하인주소/수하인연락처/수량/송하인명/송하인주소/송하인연락처
+    행3+: 데이터 (수신자 기준 그룹화, 수량 합산 — 일반용+선물용 통합)
+    취소 상태는 자동으로 제외됩니다.
     """
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment, PatternFill
+    from openpyxl.utils import get_column_letter
+
     try:
         farm_phone = st.secrets["app"]["farm_phone"]
     except Exception:
         farm_phone = settings.get("farm_phone", "")
 
-    n = len(df)
-    logen_df = pd.DataFrame({
-        "받는분성명":       df["받는분이름"].values     if "받는분이름"     in df.columns else [""] * n,
-        "받는분주소":       df["받는분주소"].values     if "받는분주소"     in df.columns else [""] * n,
-        "받는분전화번호":   df["받는분전화번호"].values if "받는분전화번호" in df.columns else [""] * n,
-        "품목":             df["상품명"].values         if "상품명"         in df.columns else [""] * n,
-        "박스수량":         df["수량"].values           if "수량"           in df.columns else [1] * n,
-        "보내는분성명":     df["주문자이름"].values     if "주문자이름"     in df.columns else [farm_name] * n,
-        "보내는분주소":     df["주문자주소"].values     if "주문자주소"     in df.columns else [""] * n,
-        "보내는분전화번호": df["주문자전화번호"].values if "주문자전화번호" in df.columns else [farm_phone] * n,
-        "배송메세지":       df["배송메모"].values       if "배송메모"       in df.columns else [""] * n,
-    })
+    farm_address = settings.get("farm_address", "")
+
+    # ── 취소 상태 자동 제외 ──
+    if "상태" in df.columns:
+        df = df[df["상태"] != "취소"].copy()
+
+    # ── 수량 안전 변환 (시트에서 문자열로 읽힌 경우 대비) ──
+    if "수량" in df.columns:
+        df["수량"] = pd.to_numeric(df["수량"], errors="coerce").fillna(1).astype(int)
+
+    # ── 수신자 기준 그룹화: 같은 수신자의 일반용+선물용 수량 합산 ──
+    group_keys = [k for k in ["받는분이름", "받는분주소", "받는분전화번호"] if k in df.columns]
+    if group_keys and "수량" in df.columns:
+        qty_sum   = df.groupby(group_keys, sort=False)["수량"].sum().reset_index()
+        other_cols = [c for c in df.columns if c not in group_keys + ["수량"]]
+        if other_cols:
+            first_row = df.groupby(group_keys, sort=False)[other_cols].first().reset_index()
+            df = qty_sum.merge(first_row, on=group_keys, how="left")
+        else:
+            df = qty_sum
+
+    # ── 엑셀 생성 ──
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "로젠택배"
+
+    # 행1: 농장 정보 텍스트 (A1)
+    addr_display = farm_address if farm_address else "(관리자 설정 탭에서 농장 주소를 입력해 주세요)"
+    info_lines = [
+        f"{farm_name}  ☎ {farm_phone}",
+        f"송하인주소 : {addr_display}",
+        "※ 택배비는 암호화해주세요",
+    ]
+    ws["A1"] = "\n".join(info_lines)
+    ws["A1"].alignment = Alignment(wrap_text=True, vertical="top")
+    ws.row_dimensions[1].height = 60
+
+    # 행2: 컬럼 헤더
+    headers = ["수하인이름", "수하인주소", "수하인연락처", "수량", "송하인명", "송하인주소", "송하인연락처", "배송메모"]
+    hdr_fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+    for c_idx, hdr in enumerate(headers, 1):
+        cell = ws.cell(row=2, column=c_idx, value=hdr)
+        cell.font = Font(bold=True)
+        cell.fill = hdr_fill
+        cell.alignment = Alignment(horizontal="center")
+
+    # 행3+: 데이터
+    def _g(row_data, col):
+        return row_data.get(col, "") if col in df.columns else ""
+
+    for r_idx, (_, row_data) in enumerate(df.iterrows(), 3):
+        qty_val = row_data.get("수량", 1) if "수량" in df.columns else 1
+        ws.cell(row=r_idx, column=1, value=_g(row_data, "받는분이름"))
+        ws.cell(row=r_idx, column=2, value=_g(row_data, "받는분주소"))
+        ws.cell(row=r_idx, column=3, value=_g(row_data, "받는분전화번호"))
+        ws.cell(row=r_idx, column=4, value=int(qty_val))
+        ws.cell(row=r_idx, column=5, value=farm_name)
+        ws.cell(row=r_idx, column=6, value=farm_address)                    # 송하인주소
+        ws.cell(row=r_idx, column=7, value=_g(row_data, "주문자전화번호"))   # 송하인연락처 = 주문자 전화번호
+        ws.cell(row=r_idx, column=8, value=_g(row_data, "배송메모"))         # 배송메모
+
+    # 컬럼 너비
+    col_widths = [16, 36, 16, 7, 14, 30, 16, 24]
+    for c_idx, width in enumerate(col_widths, 1):
+        ws.column_dimensions[get_column_letter(c_idx)].width = width
 
     output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        logen_df.to_excel(writer, index=False, sheet_name="로젠택배")
-        ws = writer.sheets["로젠택배"]
-        # 컬럼 너비 자동 조정
-        for col in ws.columns:
-            max_len = max(len(str(cell.value or "")) for cell in col)
-            ws.column_dimensions[col[0].column_letter].width = max(max_len + 2, 14)
+    wb.save(output)
     output.seek(0)
     return output.read()
 
@@ -602,48 +773,125 @@ def render_sidebar() -> bool:
     사이드바에 관리자 비밀번호 입력 UI를 표시합니다.
     올바른 비밀번호 입력 시 True를 반환합니다.
     """
+    # ── << 버튼 좌측 모드 라벨 (CSS 전역 주입) ──
+    _is_admin = st.session_state.get("_sidebar_is_admin", False)
+    _btn_lbl  = "🔧 관리자" if _is_admin else "🏠 고객"
+    _btn_clr  = "#b71c1c"   if _is_admin else "#2e7d32"
+    st.markdown(
+        f"""<style>
+        [data-testid="collapsedControl"] {{
+            display: flex !important;
+            flex-direction: row;
+            align-items: center;
+        }}
+        [data-testid="collapsedControl"]::before {{
+            content: "{_btn_lbl}";
+            font-size: 0.72rem;
+            font-weight: 700;
+            color: white;
+            background: {_btn_clr};
+            padding: 3px 9px;
+            border-radius: 10px;
+            margin-right: 5px;
+            white-space: nowrap;
+        }}
+        </style>""",
+        unsafe_allow_html=True,
+    )
+
     with st.sidebar:
         st.markdown("## 🍑 복숭아농장")
         st.markdown("---")
-        st.markdown("### 🔐 관리자 로그인")
+
+        # ── 비밀번호 입력 ──
         show_pw = st.checkbox("🔍 비밀번호 표시", key="show_admin_pw", value=False)
         pw = st.text_input(
-            "비밀번호",
+            "관리자 비밀번호",
             type="default" if show_pw else "password",
-            placeholder="관리자 비밀번호 입력",
+            placeholder="비밀번호를 입력하세요",
             key="admin_pw",
         )
 
+        # ── 비밀번호 미입력: 고객 모드 ──
         if not pw:
             st.markdown(
-                "<div style='font-size:0.85rem;opacity:0.85;'>"
-                "관리자만 접근 가능합니다.<br>"
-                "고객 주문은 아래 페이지에서 진행해주세요. 🍑"
-                "</div>",
+                """<div style='background:#1b5e20;border-radius:10px;
+                padding:14px 16px;text-align:center;margin:10px 0;'>
+                    <div style='font-size:0.72rem;color:rgba(255,255,255,0.75);
+                    margin-bottom:5px;letter-spacing:1px;'>현재 모드</div>
+                    <div style='font-size:1.25rem;font-weight:900;color:#ffffff;'>
+                    🏠 고객 모드</div>
+                    <div style='font-size:0.73rem;color:rgba(255,255,255,0.85);
+                    margin-top:7px;'>관리자 전환 → 위 칸에 비밀번호 입력</div>
+                </div>""",
                 unsafe_allow_html=True,
             )
+            st.session_state["_sidebar_is_admin"] = False
             return False
 
+        # ── 비밀번호 검증 ──
         try:
             correct_pw = st.secrets["app"]["admin_password"]
         except Exception:
-            # secrets.toml 미설정 시 관리자 접근 차단 (보안)
-            st.error("⚠️ 관리자 비밀번호가 설정되지 않았습니다. secrets.toml을 확인해주세요.")
+            st.error("⚠️ 관리자 비밀번호가 설정되지 않았습니다.")
+            st.session_state["_sidebar_is_admin"] = False
             return False
 
         if pw == correct_pw:
+            # 관리자 인증 완료 — force_customer 여부로 분기
             if st.session_state.get("force_customer"):
-                if st.button("🔧 관리자 화면으로", use_container_width=True):
+                # ── 현재: 고객 모드 (관리자 인증 완료 상태) ──
+                st.markdown(
+                    """<div style='background:#1b5e20;border-radius:10px;
+                    padding:14px 16px;text-align:center;margin:10px 0;'>
+                        <div style='font-size:0.72rem;color:rgba(255,255,255,0.75);
+                        margin-bottom:5px;letter-spacing:1px;'>현재 모드</div>
+                        <div style='font-size:1.25rem;font-weight:900;color:#ffffff;'>
+                        🏠 고객 모드</div>
+                        <div style='font-size:0.73rem;color:rgba(255,255,255,0.85);
+                        margin-top:7px;'>✅ 관리자 인증 완료 · 아래 버튼으로 전환</div>
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
+                if st.button("🔧 관리자 화면으로 전환 →", use_container_width=True,
+                             type="primary"):
                     st.session_state["force_customer"] = False
                     st.rerun()
+                st.session_state["_sidebar_is_admin"] = False
                 return False
-            st.success("✅ 관리자 모드")
-            if st.button("🏠 고객 화면으로", use_container_width=True):
-                st.session_state["force_customer"] = True
-                st.rerun()
-            return True
+            else:
+                # ── 현재: 관리자 모드 ──
+                st.markdown(
+                    """<div style='background:#7f0000;border-radius:10px;
+                    padding:14px 16px;text-align:center;margin:10px 0;'>
+                        <div style='font-size:0.72rem;color:rgba(255,255,255,0.75);
+                        margin-bottom:5px;letter-spacing:1px;'>현재 모드</div>
+                        <div style='font-size:1.25rem;font-weight:900;color:#ffffff;'>
+                        🔧 관리자 모드</div>
+                        <div style='font-size:0.73rem;color:rgba(255,255,255,0.85);
+                        margin-top:7px;'>✅ 로그인 완료 · 아래 버튼으로 전환</div>
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
+                if st.button("🏠 고객 화면으로 전환 →", use_container_width=True):
+                    st.session_state["force_customer"] = True
+                    st.rerun()
+                st.session_state["_sidebar_is_admin"] = True
+                return True
         else:
+            # ── 비밀번호 틀림: 고객 모드 유지 ──
+            st.markdown(
+                """<div style='background:#1b5e20;border-radius:10px;
+                padding:14px 16px;text-align:center;margin:10px 0;'>
+                    <div style='font-size:0.72rem;color:rgba(255,255,255,0.75);
+                    margin-bottom:5px;letter-spacing:1px;'>현재 모드</div>
+                    <div style='font-size:1.25rem;font-weight:900;color:#ffffff;'>
+                    🏠 고객 모드</div>
+                </div>""",
+                unsafe_allow_html=True,
+            )
             st.error("❌ 비밀번호가 틀렸습니다")
+            st.session_state["_sidebar_is_admin"] = False
             return False
 
 
@@ -705,13 +953,57 @@ def render_customer_page(settings: dict, products: list, prices: dict = None):
             f"</div>",
             unsafe_allow_html=True,
         )
+
+        # ── 배송 조회 (마감 후에도 이용 가능) ──
+        st.markdown("---")
+        st.markdown("#### 📦 주문번호로 배송 조회")
+        query_no = st.text_input(
+            "주문번호 입력",
+            placeholder="예: PEACH-20260613-ABC123",
+            key="track_order_no",
+        )
+        if st.button("🔍 조회", key="track_btn"):
+            if not query_no.strip():
+                st.warning("주문번호를 입력해주세요.")
+            else:
+                df_all = load_orders()
+                if df_all.empty or "주문번호" not in df_all.columns:
+                    st.error("주문 데이터를 불러올 수 없습니다.")
+                else:
+                    hit = df_all[df_all["주문번호"].str.strip() == query_no.strip()]
+                    if hit.empty:
+                        st.error("해당 주문번호를 찾을 수 없습니다. 주문번호를 다시 확인해주세요.")
+                    else:
+                        st.success(f"✅ 주문번호 **{query_no.strip()}** 조회 결과")
+                        for _, row in hit.iterrows():
+                            status_emoji = {
+                                "대기": "⏳", "입금확인": "💳", "확인": "💳",
+                                "배송준비": "📦", "배송중": "🚚", "발송완료": "🚚",
+                                "배송완료": "✅", "취소": "❌",
+                            }.get(row.get("상태", ""), "📋")
+                            st.markdown(
+                                f"<div class='recipient-box'>"
+                                f"<div class='recipient-box-title'>"
+                                f"받는분: {row.get('받는분이름','')}"
+                                f"</div>"
+                                f"<div>상품: {row.get('상품명','')} {row.get('수량','')}박스</div>"
+                                f"<div>주소: {row.get('받는분주소','')}</div>"
+                                f"<div>현재 상태: {status_emoji} <strong>{row.get('상태','')}</strong></div>"
+                                f"<div style='font-size:0.82rem;color:#888;margin-top:4px;'>"
+                                f"주문일시: {row.get('주문일시','')}</div>"
+                                f"</div>",
+                                unsafe_allow_html=True,
+                            )
         return
 
     # ── 주문 접수 중: 카운트다운 표시 ──
     countdown = format_countdown(end_dt)
     st.markdown(
         f"<div class='countdown-box'>"
-        f"✅ 주문 접수 중 — 마감까지 <strong>{countdown}</strong> 남음"
+        f"✅ 주문 접수 중"
+        f"<div style='font-size:0.88em;font-weight:normal;margin-top:4px;'>"
+        f"마감까지 <strong style='font-size:1.05em;'>{countdown}</strong> 남음"
+        f"</div>"
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -741,6 +1033,11 @@ def render_customer_page(settings: dict, products: list, prices: dict = None):
 
     st.markdown("---")
 
+    # ── 상품 목록: 두 모드 모두 전체 상품 표시 ──
+    # (일반용/선물용 구분 없이 주문자가 원하는 상품을 자유롭게 선택)
+    _gift_prods = products
+    _self_prods = products
+
     if "우리집" in order_type:
         # ── 모드 1: 본인 수령 ──
         st.markdown("### 👤 주문자 정보")
@@ -752,7 +1049,7 @@ def render_customer_page(settings: dict, products: list, prices: dict = None):
         st.markdown("### 🍑 상품 선택")
         st.caption("원하는 상품의 수량을 입력해주세요. (0박스 = 제외)")
         qtys = {}
-        for prod in products:
+        for prod in _self_prods:
             qtys[prod] = st.number_input(f"{prod} (박스)", min_value=0, max_value=99, value=0, step=1, key=f"qty_self_{prod}")
         memo = st.text_input("배송 메모 (선택)", key="rmemo_self", placeholder="경비실 맡겨주세요")
         sender_name    = orderer_name
@@ -773,7 +1070,7 @@ def render_customer_page(settings: dict, products: list, prices: dict = None):
         orderer_phone   = st.text_input("전화번호 *", placeholder="숫자만 입력 (예: 01012345678)",
                                         key="orderer_phone",
                                         on_change=_fmt_phone, args=("orderer_phone",))
-        orderer_address = st.text_input("주소 *",     placeholder="경북 김천시 OO로 OO", key="orderer_address")
+        orderer_address = ""   # 선물 모드: 주문자 주소 불필요
 
         # ── 받는 분 목록 초기화 ──
         if "gift_rec_ids" not in st.session_state:
@@ -783,6 +1080,10 @@ def render_customer_page(settings: dict, products: list, prices: dict = None):
         rec_ids = st.session_state["gift_rec_ids"]
 
         st.markdown("### 🎁 받는 분 정보")
+        st.caption(
+            "📌 받는 분의 배송 주소가 서로 다른 경우, 각 주소마다 개별 배송됩니다. "
+            "(같은 분에게 여러 상품을 보내실 때는 같은 받는 분 항목에서 수량을 올려주세요.)"
+        )
         for idx, rid in enumerate(rec_ids):
             with st.container():
                 if len(rec_ids) > 1:
@@ -791,7 +1092,7 @@ def render_customer_page(settings: dict, products: list, prices: dict = None):
                     if col_d.button("🗑️ 삭제", key=f"del_rec_{rid}"):
                         st.session_state["gift_rec_ids"].remove(rid)
                         for sfx in (["name", "phone", "address", "memo"]
-                                    + [f"qty_{p}" for p in products]):
+                                    + [f"qty_{p}" for p in products]):  # 전체 products로 정리
                             st.session_state.pop(f"gr_{rid}_{sfx}", None)
                         st.rerun()
                 else:
@@ -803,7 +1104,7 @@ def render_customer_page(settings: dict, products: list, prices: dict = None):
                               on_change=_fmt_phone, args=(f"gr_{rid}_phone",))
                 st.text_input("배송 주소 *", placeholder="서울시 강남구 테헤란로 123", key=f"gr_{rid}_address")
                 st.caption("원하는 상품의 수량을 입력해주세요. (0박스 = 제외)")
-                for prod in products:
+                for prod in _gift_prods:
                     st.number_input(f"{prod} (박스)", min_value=0, max_value=99,
                                     value=0, step=1, key=f"gr_{rid}_qty_{prod}")
                 st.text_input("배송 메모 (선택)", placeholder="경비실 맡겨주세요",
@@ -827,7 +1128,7 @@ def render_customer_page(settings: dict, products: list, prices: dict = None):
             r_phone   = st.session_state.get(f"gr_{rid}_phone",   "")
             r_address = st.session_state.get(f"gr_{rid}_address", "")
             r_memo    = st.session_state.get(f"gr_{rid}_memo",    "")
-            for prod in products:
+            for prod in _gift_prods:
                 qty = st.session_state.get(f"gr_{rid}_qty_{prod}", 0)
                 if qty > 0:
                     recipients.append({
@@ -904,8 +1205,8 @@ def _validate_order(orderer_name, orderer_phone, sender_name, sender_phone, send
     elif not validate_phone(orderer_phone):
         errors.append("❗ 전화번호 형식이 올바르지 않습니다. (예: 010-1234-5678)")
 
-    # 주소 검증 (항상)
-    if not sender_address.strip():
+    # 주소 검증 — 우리집 배달 모드(same_person)에서만 필수
+    if same_person and not sender_address.strip():
         errors.append("❗ 배송 주소를 입력해주세요.")
 
     if not same_person:
@@ -953,6 +1254,23 @@ def _submit_order(orderer_name, orderer_phone, sender_name, sender_phone, sender
 
     if success:
         load_orders.clear()   # 관리자 화면에서 즉시 새 주문을 볼 수 있도록 캐시 클리어
+
+        # ── 주문 확인 문자 자동 발송 (CoolSMS 설정 시) ──
+        product_summary = ", ".join(
+            f"{r['product']} {r['qty']}박스" for r in recipients
+        )
+        bank   = settings.get("bank",           "농협")
+        acct   = settings.get("account_number", "000-0000-0000")
+        holder = settings.get("holder",         "장명숙")
+        # SMS 90자 이내 유지 → SMS 요금 적용 (초과 시 LMS 자동 전환)
+        sms_msg = (
+            f"[복숭아농장] 주문완료\n"
+            f"번호:{order_number[-6:]}\n"
+            f"입금:{bank} {acct}({holder})\n"
+            f"입금확인 후 발송안내드립니다."
+        )
+        send_sms(orderer_phone, sms_msg)   # 실패해도 주문은 완료 처리
+
         st.session_state["order_complete"] = True
         st.session_state["order_result"]   = {
             "order_number": order_number,
@@ -1056,17 +1374,29 @@ def render_admin_orders():
     # ── 지표 ──
     # "전체 주문"은 고유 주문번호 기준 (상품 2개 주문해도 1건으로 카운트)
     total    = int(df["주문번호"].nunique()) if "주문번호" in df.columns else len(df)
-    waiting  = int((df["상태"] == "대기").sum())    if "상태" in df.columns else 0
-    confirm  = int((df["상태"] == "확인").sum())    if "상태" in df.columns else 0
-    shipped  = int((df["상태"] == "발송완료").sum()) if "상태" in df.columns else 0
-    canceled = int((df["상태"] == "취소").sum())    if "상태" in df.columns else 0
+    waiting  = int((df["상태"] == "대기").sum())     if "상태" in df.columns else 0
+    confirm  = int((df["상태"] == "입금확인").sum()) if "상태" in df.columns else 0
+    shipped  = int((df["상태"].isin(["배송중","발송완료","배송완료"])).sum()) if "상태" in df.columns else 0
+    canceled = int((df["상태"] == "취소").sum())     if "상태" in df.columns else 0
 
-    c1, c2, c3, c4, c5 = st.columns(5)
-    _metric_card(c1, "전체 주문", total,    "#ff8c42")
-    _metric_card(c2, "대기",      waiting,  "#ffc107")
-    _metric_card(c3, "확인",      confirm,  "#2196f3")
-    _metric_card(c4, "발송완료",  shipped,  "#4caf50")
-    _metric_card(c5, "취소",      canceled, "#9e9e9e")
+    # ── 총매출 계산 (입금확인 + 배송 관련 상태 기준) ──
+    revenue = 0
+    prices  = load_product_prices()
+    if prices and "상품명" in df.columns and "수량" in df.columns and "상태" in df.columns:
+        paid_df = df[df["상태"].isin(["입금확인","배송준비","배송중","발송완료","배송완료"])].copy()
+        paid_df["수량_n"] = pd.to_numeric(paid_df["수량"], errors="coerce").fillna(0).astype(int)
+        paid_df["단가"]   = paid_df["상품명"].map(prices).fillna(0).astype(int)
+        revenue = int((paid_df["수량_n"] * paid_df["단가"]).sum())
+
+    revenue_str = f"{revenue:,}원" if revenue > 0 else "단가 미설정"
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    _metric_card(c1, "전체 주문",  total,        "#ff8c42")
+    _metric_card(c2, "대기",       waiting,      "#ffc107")
+    _metric_card(c3, "입금확인",   confirm,      "#2196f3")
+    _metric_card(c4, "배송완료",   shipped,      "#4caf50")
+    _metric_card(c5, "취소",       canceled,     "#9e9e9e")
+    _metric_card(c6, "총매출(입금)", revenue_str, "#7b1fa2")
 
     st.markdown("---")
 
@@ -1077,13 +1407,13 @@ def render_admin_orders():
     with fc2:
         status_view = st.multiselect(
             "상태 필터",
-            options=["대기", "확인", "발송완료", "취소"],
-            default=["대기", "확인", "발송완료", "취소"],
+            options=["대기", "입금확인", "배송준비", "배송중", "배송완료", "취소"],
+            default=["대기", "입금확인", "배송준비", "배송중", "배송완료", "취소"],
             key="order_status_filter",
         )
 
     # ── 상태 값 정리 (잘못된 값은 "대기"로 초기화) ──
-    valid_statuses = ["대기", "확인", "발송완료", "취소"]
+    valid_statuses = ["대기", "입금확인", "배송준비", "배송중", "배송완료", "취소"]
     if "상태" in df.columns:
         df["상태"] = df["상태"].apply(lambda x: x if x in valid_statuses else "대기")
 
@@ -1121,7 +1451,7 @@ def render_admin_orders():
             "주문자주소":     st.column_config.TextColumn("보내는분주소",     disabled=True),
             "상태": st.column_config.SelectboxColumn(
                 "상태",
-                options=["대기", "확인", "발송완료", "취소"],
+                options=["대기", "입금확인", "배송준비", "배송중", "배송완료", "취소"],
             ),
         },
         key="orders_editor",
@@ -1134,22 +1464,46 @@ def render_admin_orders():
             if sheet:
                 saved = 0
                 try:
-                    # 시트 헤더에서 '상태' 열 번호를 동적으로 계산 (1-indexed)
-                    orig_cols = [c for c in df.columns if c != "순번"]
-                    status_col = (orig_cols.index("상태") + 1) if "상태" in orig_cols else 12
-                    for idx in range(len(df)):
-                        orig = df.iloc[idx]["상태"] if "상태" in df.columns else ""
-                        new  = edited_df.iloc[idx]["상태"]
-                        if orig != new:
-                            # idx + 2: 헤더행(1) + 데이터 시작(2)
-                            sheet.update_cell(idx + 2, status_col, new)
-                            saved += 1
-                    if saved:
-                        st.success(f"✅ {saved}건의 상태를 저장했습니다.")
-                        load_orders.clear()   # 캐시 초기화 → 다음 로드 시 최신 데이터
-                        st.rerun()
+                    # 시트 전체를 다시 읽어 실제 행 번호를 매핑 (필터/정렬 후 오프셋 오류 방지)
+                    all_rows = sheet.get_all_values()
+                    if not all_rows:
+                        st.warning("시트가 비어 있습니다.")
                     else:
-                        st.info("변경된 항목이 없습니다.")
+                        headers    = all_rows[0]
+                        status_col = (headers.index("상태")      + 1) if "상태"      in headers else 12
+                        # (주문번호, 받는분이름, 받는분전화번호, 상품명) 조합으로 시트 행 번호 룩업 테이블 생성
+                        # 전화번호 포함으로 동명이인·동일상품 다중수령 시 키 충돌 방지
+                        col_idx = {h: i for i, h in enumerate(headers)}
+                        lookup = {}
+                        for row_i, row in enumerate(all_rows[1:], start=2):
+                            def _s(c): return row[col_idx[c]] if c in col_idx and len(row) > col_idx[c] else ""
+                            key = (_s("주문번호"), _s("받는분이름"), _s("받는분전화번호"), _s("상품명"))
+                            lookup[key] = row_i
+
+                        for idx in range(len(df)):
+                            orig_status = df.iloc[idx]["상태"] if "상태" in df.columns else ""
+                            new_status  = edited_df.iloc[idx]["상태"]
+                            if orig_status == new_status:
+                                continue
+                            row_data = edited_df.iloc[idx]
+                            key = (
+                                str(row_data.get("주문번호",         "")),
+                                str(row_data.get("받는분이름",       "")),
+                                str(row_data.get("받는분전화번호",   "")),
+                                str(row_data.get("상품명",           "")),
+                            )
+                            if key in lookup:
+                                sheet.update_cell(lookup[key], status_col, new_status)
+                                saved += 1
+                            else:
+                                st.warning(f"시트에서 행을 찾지 못했습니다: {key}")
+
+                        if saved:
+                            st.success(f"✅ {saved}건의 상태를 저장했습니다.")
+                            load_orders.clear()
+                            st.rerun()
+                        else:
+                            st.info("변경된 항목이 없습니다.")
                 except Exception as e:
                     st.error(f"저장 실패: {e}")
             else:
@@ -1253,8 +1607,8 @@ def render_admin_logen(settings: dict):
     with col1:
         status_filter = st.multiselect(
             "상태 필터",
-            options=["대기", "확인", "발송완료", "취소"],
-            default=["대기", "확인"],
+            options=["대기", "입금확인", "발송완료", "취소"],
+            default=["대기", "입금확인"],
             key="logen_status",
         )
     with col2:
@@ -1390,42 +1744,97 @@ def render_admin_email(settings: dict):
 
     st.markdown("---")
 
-    # ── 고객 목록 및 전화번호 표시 ──
+    # ── 고객 목록 및 문자 발송 ──
     customers_df = load_customers()
     if not customers_df.empty:
-        st.markdown(f"**📋 고객 목록 ({len(customers_df)}명) — 전화번호 확인 후 직접 발송하세요**")
+        st.markdown(f"**📋 고객 목록 ({len(customers_df)}명)**")
         st.dataframe(customers_df, use_container_width=True)
+
+        st.markdown("---")
+        # CoolSMS 설정 여부 확인
+        sms_ready = _COOLSMS_AVAILABLE and ("coolsms" in st.secrets)
+        if sms_ready:
+            st.markdown("**📱 문자 일괄 발송 (CoolSMS)**")
+            # 전화번호 컬럼 자동 감지
+            phone_col = next(
+                (c for c in customers_df.columns if "전화" in c or "phone" in c.lower()),
+                None
+            )
+            if phone_col:
+                numbers = customers_df[phone_col].dropna().tolist()
+                st.caption(f"발송 대상: **{len(numbers)}명** · 발송 전 메시지를 반드시 확인하세요.")
+                col_send, col_test = st.columns(2)
+                with col_send:
+                    if st.button("📤 전체 고객에게 문자 발송", use_container_width=True,
+                                 type="primary"):
+                        if not body.strip():
+                            st.error("메시지 내용을 입력해주세요.")
+                        else:
+                            with st.spinner(f"{len(numbers)}명에게 발송 중..."):
+                                ok, fail = send_sms_bulk(numbers, body)
+                            st.success(f"발송 완료: 성공 {ok}건 / 실패 {fail}건")
+                with col_test:
+                    test_number = st.text_input("테스트 번호", placeholder="01012345678",
+                                                key="sms_test_num")
+                    if st.button("테스트 문자 발송", use_container_width=True):
+                        if test_number.strip():
+                            if send_sms(test_number.strip(), body):
+                                st.success(f"테스트 문자 발송 완료 ({test_number})")
+                            else:
+                                st.error("발송 실패 - CoolSMS 설정을 확인해주세요.")
+                        else:
+                            st.warning("테스트 번호를 입력해주세요.")
+            else:
+                st.warning("고객목록 시트에 '전화번호' 열이 없습니다.")
+        else:
+            st.markdown("**직접 발송 안내**")
+            if not _COOLSMS_AVAILABLE:
+                st.info(
+                    "자동 문자 발송을 사용하려면:\n"
+                    "1. `pip install coolsms` 설치\n"
+                    "2. secrets.toml에 [coolsms] api_key / api_secret / sender 추가\n\n"
+                    "지금은 위 메시지를 복사해서 카카오톡/문자로 직접 보내주세요."
+                )
+            else:
+                st.info("secrets.toml에 [coolsms] 설정을 추가하면 자동 발송이 활성화됩니다.")
     else:
         st.warning("고객목록 시트에 고객 정보가 없습니다. '이름 / 전화번호' 형태로 입력해주세요.")
 
 
 # =============================================================================
-# [B] 관리자 탭 5 — 설정
+# [B] 관리자 탭 5 - 설정
 # =============================================================================
 
 def render_admin_settings(settings: dict):
     """농장 정보 및 앱 설정 탭"""
-    st.markdown("### ⚙️ 설정")
+    st.markdown("### 설정")
 
     st.markdown("**농장 / 계좌 정보**")
     col1, col2 = st.columns(2)
     with col1:
-        new_bank   = st.text_input("은행명",           value=settings.get("bank", "농협"),         key="cfg_bank")
-        new_holder = st.text_input("예금주",           value=settings.get("holder", "장명숙"),     key="cfg_holder")
+        new_bank    = st.text_input("은행명",        value=settings.get("bank",           "농협"),   key="cfg_bank")
+        new_holder  = st.text_input("예금주",        value=settings.get("holder",         "장명숙"), key="cfg_holder")
     with col2:
-        new_acct   = st.text_input("계좌번호",         value=settings.get("account_number", ""),  key="cfg_acct")
-        new_phone  = st.text_input("농장 전화번호",    value=settings.get("farm_phone", ""),       key="cfg_phone")
+        new_acct    = st.text_input("계좌번호",      value=settings.get("account_number", ""),      key="cfg_acct")
+        new_phone   = st.text_input("농장 전화번호", value=settings.get("farm_phone",     ""),      key="cfg_phone")
+    new_address = st.text_input(
+        "농장 주소 (로젠택배 송하인 주소)",
+        value=settings.get("farm_address", ""),
+        placeholder="경북 김천시 감문면 문무리 1269번지",
+        key="cfg_farm_address",
+    )
 
-    if st.button("💾 설정 저장"):
+    if st.button("설정 저장"):
         settings.update({
             "bank":           new_bank,
             "holder":         new_holder,
             "account_number": new_acct,
             "farm_phone":     new_phone,
+            "farm_address":   new_address,
         })
         if save_settings(settings):
             load_settings.clear()
-            st.success("✅ 설정이 저장되었습니다.")
+            st.success("설정이 저장되었습니다.")
             st.rerun()
         else:
             st.error("저장 실패. Google Sheets 연결을 확인해주세요.")
@@ -1434,11 +1843,11 @@ def render_admin_settings(settings: dict):
     st.markdown("**secrets.toml 설정 안내**")
     st.info(
         "아래 항목은 `.streamlit/secrets.toml` 파일 (또는 Streamlit Cloud Secrets)에서 설정합니다.\n\n"
-        "- `[gcp_service_account]` — Google 서비스 계정 JSON 내용\n"
-        "- `[app] spreadsheet_id` — Google Sheets URL의 `/d/` 뒤 ID\n"
-        "- `[app] admin_password` — 관리자 비밀번호\n"
-        "- `[email]` — Gmail 계정과 앱 비밀번호\n"
-        "- `[account]` — 기본 계좌 정보 (설정 시트보다 우선순위 낮음)"
+        "- `[gcp_service_account]` - Google 서비스 계정 JSON 내용\n"
+        "- `[app] spreadsheet_id` - Google Sheets URL의 `/d/` 뒤 ID\n"
+        "- `[app] admin_password` - 관리자 비밀번호\n"
+        "- `[coolsms]` - CoolSMS API 키 (문자 자동발송용)\n"
+        "- `[account]` - 기본 계좌 정보"
     )
 
     st.markdown("---")
@@ -1447,27 +1856,26 @@ def render_admin_settings(settings: dict):
     if client is not None:
         ss = get_spreadsheet()
         if ss is not None:
-            st.success("✅ Google Sheets 연결 성공")
+            st.success("Google Sheets 연결 성공")
             try:
                 ws_names = [ws.title for ws in ss.worksheets()]
                 st.write("시트 목록:", ", ".join(ws_names))
-                # 필수 시트 확인
                 required = {"주문목록", "상품목록", "고객목록", "설정"}
                 missing  = required - set(ws_names)
                 if missing:
                     st.warning(f"누락된 시트: {', '.join(missing)}")
                 else:
-                    st.success("✅ 필수 시트(주문목록/상품목록/고객목록/설정) 모두 존재")
+                    st.success("필수 시트(주문목록/상품목록/고객목록/설정) 모두 존재")
             except Exception:
                 pass
         else:
-            st.error("❌ 스프레드시트를 열 수 없습니다. spreadsheet_id를 확인해주세요.")
+            st.error("스프레드시트를 열 수 없습니다. spreadsheet_id를 확인해주세요.")
     else:
-        st.error("❌ Google Sheets 연결 실패. gcp_service_account 설정을 확인해주세요.")
+        st.error("Google Sheets 연결 실패. gcp_service_account 설정을 확인해주세요.")
 
 
 # =============================================================================
-# [B] 관리자 페이지 — 탭 통합
+# [B] 관리자 페이지 - 탭 통합
 # =============================================================================
 
 def render_admin_page(settings: dict, products: list):
@@ -1475,18 +1883,18 @@ def render_admin_page(settings: dict, products: list):
     farm_name = _get_farm_name()
     st.markdown(
         f"<div class='peach-header'>"
-        f"<h1>🔧 {farm_name} 관리자</h1>"
+        f"<h1>{farm_name}<span class='admin-sub'>관리자 페이지</span></h1>"
         f"<p>주문 관리 및 운영 설정 페이지</p>"
-        f"</div>",
+         f"</div>",
         unsafe_allow_html=True,
     )
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📊 주문 현황",
-        "⏰ 주문 기간 설정",
-        "📦 로젠택배 엑셀",
-        "💬 메시지 발송",
-        "⚙️ 설정",
+        "주문 현황",
+        "주문 기간 설정",
+        "로젠택배 엑셀",
+        "메시지 발송",
+        "설정",
     ])
 
     with tab1: render_admin_orders()
@@ -1501,6 +1909,27 @@ def render_admin_page(settings: dict, products: list):
 # =============================================================================
 
 def main():
-    """앱 진입점: 세션 초기화 → 사이드바 로그인 → 관리자/고객 분기"""
+    """앱 진입점: 세션 초기화 -> 사이드바 로그인 -> 관리자/고객 분기"""
 
-    # 세션 상
+    for key, default in [
+        ("order_complete", False),
+        ("order_result",   None),
+        ("recipients",     None),
+    ]:
+        if key not in st.session_state:
+            st.session_state[key] = default
+
+    is_admin = render_sidebar()
+
+    settings = load_settings()
+    products = load_products()
+    prices   = load_product_prices()
+
+    if is_admin:
+        render_admin_page(settings, products)
+    else:
+        render_customer_page(settings, products, prices)
+
+
+if __name__ == "__main__":
+    main()
