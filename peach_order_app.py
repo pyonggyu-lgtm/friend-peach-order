@@ -1,5 +1,5 @@
 # =============================================================================
-# 🍑 실크로드 복숭아 농장 주문관리 시스템 (Streamlit + Google Sheets)
+# 🍑 실크로드농원 주문관리 시스템 (Streamlit + Google Sheets)
 # =============================================================================
 #
 # ┌─────────────────────────────────────────────────────────────────────────┐
@@ -53,7 +53,7 @@
 # │  [app]                                                                  │
 # │  admin_password = "복숭아1234"                                           │
 # │  spreadsheet_id = "1ABC...xyz"                                          │
-# │  farm_name = "실크로드 복숭아 농장"                                          │
+# │  farm_name = "실크로드농원"                                          │
 # │  order_url = "https://your-app.streamlit.app"                           │
 # │                                                                         │
 # │  [email]                                                                │
@@ -287,6 +287,15 @@ h3 {
 /* ── 모바일 반응형 ── */
 @media (max-width: 768px) {
     .peach-header { padding: 1.3rem 1rem; }
+}
+
+/* ── 모바일 스크롤 / 핀치줌 허용 ── */
+* {
+    touch-action: pan-y pinch-zoom !important;
+}
+html, body {
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -957,7 +966,7 @@ def _get_farm_name() -> str:
     try:
         return st.secrets["app"]["farm_name"]
     except Exception:
-        return "실크로드 복숭아 농장"
+        return "실크로드농원"
 
 
 def _empty_recipient() -> dict:
@@ -2091,6 +2100,40 @@ def render_admin_page(settings: dict, products: list):
 
 def main():
     """앱 진입점: 세션 초기화 -> 사이드바 로그인 -> 관리자/고객 분기"""
+
+    # 모바일 스크롤 + 핀치줌 허용
+    import streamlit.components.v1 as _components
+    _components.html(
+        """
+        <script>
+        (function() {
+            try {
+                var doc = window.parent.document;
+                // 뷰포트: 핀치줌 허용
+                var meta = doc.querySelector('meta[name="viewport"]');
+                if (meta) {
+                    meta.setAttribute('content',
+                        'width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes');
+                }
+                // 스크롤 허용 (touch 이벤트가 스크롤을 막지 않도록)
+                doc.addEventListener('touchmove', function(e) {
+                    e.stopPropagation();
+                }, { passive: true, capture: true });
+                // 스타일: 모든 요소에 핀치줌 + 스크롤 허용 (중복 방지)
+                if (!doc.getElementById('peach-touch-fix')) {
+                    var style = doc.createElement('style');
+                    style.id = 'peach-touch-fix';
+                    style.textContent =
+                        '* { touch-action: pan-y pinch-zoom !important; }' +
+                        'html, body { overflow-y: auto !important; -webkit-overflow-scrolling: touch !important; }';
+                    doc.head.appendChild(style);
+                }
+            } catch(e) {}
+        })();
+        </script>
+        """,
+        height=0,
+    )
 
     for key, default in [
         ("order_complete", False),
